@@ -1,0 +1,50 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { stringify } from 'yaml';
+import { execute, terminateTree } from '../../src/process.js';
+import { alive, rulesHash } from '../../src/util.js';
+import { fixture } from '../helpers.js';
+import { setTimeout as delay } from 'node:timers/promises';
+
+test('CLI onboarding previews changes and preserves existing instructions; a detached worker survives its launching CLI', async () => {
+  const f = await fixture();
+  let workerPid: number | undefined;
+  try {
+    const config = join(f.dir, 'project.yaml'); writeFileSync(config, stringify(f.run.plan.project));
+    const cli = async (args: string[]) => {
+      const result = await execute({command: process.execPath, args: ['--import', 'tsx', resolve('src/cli/index.ts'), '--project', f.root, ...args]},
+        {cwd: process.cwd(), env: {...process.env, EASY_SKILLS_HOME: f.store.home}, timeoutMs: 20_000});
+      assert.equal(result.code, 0, result.stderr); return JSON.parse(result.stdout);
+    };
+    const proposal = await cli(['init', '--config', config]);
+    assert.equal(existsSync(join(f.root, '.easy-skills/project.yaml')), false);
+    await cli(['init', '--config', config, '--apply-hash', proposal.hash]);
+    assert.ok(readFileSync(join(f.root, 'AGENTS.md'), 'utf8').startsWith('Use focused tests.'));
+    assert.equal(readFileSync(join(f.root, 'AGENTS.md.easy-skills-backup'), 'utf8'), 'Use focused tests.\n');
+    const plan = {...f.run.plan, featureId: 'cli-feature', rulesHash: rulesHash(f.root)};
+    const file = join(f.dir, 'execution.yaml'); writeFileSync(file, stringify(plan));
+    const drafted = await cli(['feature', 'draft', '--file', file]);
+    assert.equal(drafted.status, 'draft');
+    await cli(['feature', 'approve', drafted.runId, '--hash', drafted.planHash]);
+    // Force a safe stop before any external GitHub operation or paid model request.
+    f.store.db.prepare('DELETE FROM probes').run();
+    const started = await cli(['start', drafted.runId]); workerPid = started.pid;
+    assert.ok(workerPid && alive(workerPid));
+    const deadline = Date.now() + 10_000;
+    while (f.store.get(drafted.runId).status !== 'needs_decision' && Date.now() < deadline) await delay(50);
+    const status = await cli(['status', drafted.runId]);
+    assert.equal(status.status, 'needs_decision'); assert.match(status.reason, /exact model configuration/);
+    assert.ok(alive(workerPid));
+    const reattached = await cli(['start', drafted.runId]); assert.equal(reattached.attached, true);
+    await cli(['stop', drafted.runId]);
+    const stoppedAt = Date.now() + 10_000;
+    while (alive(workerPid) && Date.now() < stoppedAt) await delay(50);
+    assert.equal(alive(workerPid), false);
+    assert.equal(f.store.get(drafted.runId).status, 'stopped');
+  } finally {
+    if (workerPid && alive(workerPid)) {await terminateTree(workerPid); await delay(200);}
+    await f.dispose();
+  }
+});

@@ -1,0 +1,771 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+    },
+    "root": {
+      "type": "string"
+    },
+    "commonDir": {
+      "type": "string"
+    },
+    "plan": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "type": "number",
+          "const": 1
+        },
+        "featureId": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "spec": {
+          "type": "string",
+          "minLength": 1
+        },
+        "project": {
+          "type": "object",
+          "properties": {
+            "schemaVersion": {
+              "type": "number",
+              "const": 1
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "repository": {
+              "type": "string",
+              "pattern": "^[\\w.-]+\\/[\\w.-]+$"
+            },
+            "mainBranch": {
+              "type": "string",
+              "minLength": 1
+            },
+            "remote": {
+              "default": "origin",
+              "type": "string",
+              "const": "origin"
+            },
+            "githubTransport": {
+              "type": "string",
+              "const": "gh"
+            },
+            "checks": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+                  },
+                  "command": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "args": {
+                    "default": [],
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "timeoutMs": {
+                    "default": 300000,
+                    "type": "integer",
+                    "minimum": 100,
+                    "maximum": 3600000
+                  },
+                  "resource": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "id",
+                  "command",
+                  "args",
+                  "timeoutMs"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "name",
+            "repository",
+            "mainBranch",
+            "remote",
+            "githubTransport",
+            "checks"
+          ],
+          "additionalProperties": false
+        },
+        "assignments": {
+          "type": "object",
+          "properties": {
+            "DEFINE": {
+              "type": "object",
+              "properties": {
+                "provider": {
+                  "type": "string",
+                  "enum": [
+                    "codex",
+                    "claude-code"
+                  ]
+                },
+                "model": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 150,
+                  "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$"
+                }
+              },
+              "required": [
+                "provider",
+                "model"
+              ],
+              "additionalProperties": false
+            },
+            "PLAN": {
+              "type": "object",
+              "properties": {
+                "provider": {
+                  "type": "string",
+                  "enum": [
+                    "codex",
+                    "claude-code"
+                  ]
+                },
+                "model": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 150,
+                  "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$"
+                }
+              },
+              "required": [
+                "provider",
+                "model"
+              ],
+              "additionalProperties": false
+            },
+            "BUILD": {
+              "type": "object",
+              "properties": {
+                "provider": {
+                  "type": "string",
+                  "enum": [
+                    "codex",
+                    "claude-code"
+                  ]
+                },
+                "model": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 150,
+                  "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$"
+                }
+              },
+              "required": [
+                "provider",
+                "model"
+              ],
+              "additionalProperties": false
+            },
+            "VERIFY": {
+              "type": "object",
+              "properties": {
+                "provider": {
+                  "type": "string",
+                  "enum": [
+                    "codex",
+                    "claude-code"
+                  ]
+                },
+                "model": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 150,
+                  "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$"
+                }
+              },
+              "required": [
+                "provider",
+                "model"
+              ],
+              "additionalProperties": false
+            },
+            "REVIEW": {
+              "type": "object",
+              "properties": {
+                "provider": {
+                  "type": "string",
+                  "enum": [
+                    "codex",
+                    "claude-code"
+                  ]
+                },
+                "model": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 150,
+                  "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$"
+                }
+              },
+              "required": [
+                "provider",
+                "model"
+              ],
+              "additionalProperties": false
+            },
+            "SHIP": {
+              "type": "object",
+              "properties": {
+                "provider": {
+                  "type": "string",
+                  "enum": [
+                    "codex",
+                    "claude-code"
+                  ]
+                },
+                "model": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 150,
+                  "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$"
+                }
+              },
+              "required": [
+                "provider",
+                "model"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "DEFINE",
+            "PLAN",
+            "BUILD",
+            "VERIFY",
+            "REVIEW",
+            "SHIP"
+          ],
+          "additionalProperties": false
+        },
+        "tasks": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1
+              },
+              "dependsOn": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+                }
+              },
+              "acceptance": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "required": [
+              "id",
+              "title",
+              "description",
+              "dependsOn",
+              "acceptance"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "rulesHash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "runnerVersion": {
+          "type": "string",
+          "const": "0.1.0-alpha.1"
+        },
+        "skillsVersion": {
+          "type": "string",
+          "const": "0.1.0-alpha.1"
+        },
+        "permissions": {
+          "type": "object",
+          "properties": {
+            "publishIssues": {
+              "type": "boolean"
+            },
+            "mergeIntermediate": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "publishIssues",
+            "mergeIntermediate"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "featureId",
+        "title",
+        "spec",
+        "project",
+        "assignments",
+        "tasks",
+        "rulesHash",
+        "runnerVersion",
+        "skillsVersion",
+        "permissions"
+      ],
+      "additionalProperties": false
+    },
+    "planHash": {
+      "type": "string"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "approved",
+        "running",
+        "waiting_quota",
+        "needs_decision",
+        "paused",
+        "stopped",
+        "ready",
+        "merged"
+      ]
+    },
+    "createdAt": {
+      "type": "string"
+    },
+    "updatedAt": {
+      "type": "string"
+    },
+    "approvedHash": {
+      "type": "string"
+    },
+    "branch": {
+      "type": "string"
+    },
+    "worktree": {
+      "type": "string"
+    },
+    "parentIssue": {
+      "type": "integer",
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991
+    },
+    "finalPr": {
+      "type": "object",
+      "properties": {
+        "number": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "url": {
+          "type": "string"
+        },
+        "headRefOid": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "mergedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "baseRefName": {
+          "type": "string"
+        },
+        "headRefName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "number",
+        "url",
+        "headRefOid",
+        "state",
+        "mergedAt",
+        "baseRefName",
+        "headRefName"
+      ],
+      "additionalProperties": false
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+          },
+          "integrated": {
+            "type": "boolean"
+          },
+          "cursor": {
+            "type": "string",
+            "enum": [
+              "BUILD",
+              "VERIFY",
+              "REVIEW",
+              "SHIP",
+              "INTEGRATE"
+            ]
+          },
+          "issue": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "pr": {
+            "type": "object",
+            "properties": {
+              "number": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "url": {
+                "type": "string"
+              },
+              "headRefOid": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string"
+              },
+              "mergedAt": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "baseRefName": {
+                "type": "string"
+              },
+              "headRefName": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "number",
+              "url",
+              "headRefOid",
+              "state",
+              "mergedAt",
+              "baseRefName",
+              "headRefName"
+            ],
+            "additionalProperties": false
+          },
+          "worktree": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "head": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "checkId": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+                },
+                "head": {
+                  "type": "string"
+                },
+                "code": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "finishedAt": {
+                  "type": "string"
+                },
+                "log": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "checkId",
+                "head",
+                "code",
+                "finishedAt",
+                "log"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "reviewHead": {
+            "type": "string"
+          },
+          "sessions": {
+            "type": "object",
+            "properties": {
+              "DEFINE": {
+                "type": "string"
+              },
+              "PLAN": {
+                "type": "string"
+              },
+              "BUILD": {
+                "type": "string"
+              },
+              "VERIFY": {
+                "type": "string"
+              },
+              "REVIEW": {
+                "type": "string"
+              },
+              "SHIP": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "integrated",
+          "cursor",
+          "evidence",
+          "sessions"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "finalPhase": {
+      "type": "string",
+      "enum": [
+        "SYNC",
+        "VERIFY",
+        "REVIEW",
+        "SHIP"
+      ]
+    },
+    "finalEvidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "checkId": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+          },
+          "head": {
+            "type": "string"
+          },
+          "code": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "finishedAt": {
+            "type": "string"
+          },
+          "log": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "checkId",
+          "head",
+          "code",
+          "finishedAt",
+          "log"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "finalReviewHead": {
+      "type": "string"
+    },
+    "syncedBase": {
+      "type": "string"
+    },
+    "finalSessions": {
+      "type": "object",
+      "properties": {
+        "DEFINE": {
+          "type": "string"
+        },
+        "PLAN": {
+          "type": "string"
+        },
+        "BUILD": {
+          "type": "string"
+        },
+        "VERIFY": {
+          "type": "string"
+        },
+        "REVIEW": {
+          "type": "string"
+        },
+        "SHIP": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "childPid": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "childStartedAt": {
+      "type": "string"
+    },
+    "activeResource": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "retryAt": {
+      "type": "string"
+    },
+    "pendingDecision": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+        },
+        "planHash": {
+          "type": "string"
+        },
+        "head": {
+          "type": "string"
+        },
+        "stage": {
+          "type": "string",
+          "enum": [
+            "DEFINE",
+            "PLAN",
+            "BUILD",
+            "VERIFY",
+            "REVIEW",
+            "SHIP"
+          ]
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "question": {
+          "type": "string"
+        },
+        "answer": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "planHash",
+        "head",
+        "stage",
+        "question"
+      ],
+      "additionalProperties": false
+    },
+    "failures": {
+      "type": "object",
+      "properties": {
+        "fingerprint": {
+          "type": "string"
+        },
+        "head": {
+          "type": "string"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "fingerprint",
+        "head",
+        "count"
+      ],
+      "additionalProperties": false
+    },
+    "control": {
+      "type": "string",
+      "enum": [
+        "pause",
+        "stop"
+      ]
+    }
+  },
+  "required": [
+    "id",
+    "root",
+    "commonDir",
+    "plan",
+    "planHash",
+    "revision",
+    "status",
+    "createdAt",
+    "updatedAt",
+    "branch",
+    "tasks",
+    "finalPhase",
+    "finalEvidence",
+    "finalSessions",
+    "failures"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,7 @@
+Easy Skills
+Copyright 2026 Easy Skills contributors
+
+Original implementation licensed under Apache License 2.0.
+Selected engineering procedures are adapted from the projects identified in
+THIRD_PARTY_NOTICES.md. Their original licenses and copyright notices are retained
+under third-party/. No upstream CLI binary or credential is redistributed.

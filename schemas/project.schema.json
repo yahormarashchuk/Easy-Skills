@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "type": "number",
+      "const": 1
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "repository": {
+      "type": "string",
+      "pattern": "^[\\w.-]+\\/[\\w.-]+$"
+    },
+    "mainBranch": {
+      "type": "string",
+      "minLength": 1
+    },
+    "remote": {
+      "default": "origin",
+      "type": "string",
+      "const": "origin"
+    },
+    "githubTransport": {
+      "type": "string",
+      "const": "gh"
+    },
+    "checks": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+          },
+          "command": {
+            "type": "string",
+            "minLength": 1
+          },
+          "args": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "timeoutMs": {
+            "default": 300000,
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 3600000
+          },
+          "resource": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "id",
+          "command",
+          "args",
+          "timeoutMs"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "name",
+    "repository",
+    "mainBranch",
+    "remote",
+    "githubTransport",
+    "checks"
+  ],
+  "additionalProperties": false
+}

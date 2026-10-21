@@ -1,0 +1,11 @@
+node_modules/
+dist/
+coverage/
+*.tgz
+.env
+*.db
+*.db-shm
+*.db-wal
+.easy-skills-local/
+artifacts/
+/skills/easy-*/references/

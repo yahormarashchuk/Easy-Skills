@@ -1,0 +1,14 @@
+featureId: example-feature
+title: Example feature
+spec: |
+  Describe the agreed user behavior, scope, constraints and acceptance criteria.
+assignments:
+  DEFINE: {provider: codex, model: YOUR_CURRENT_EXACT_MODEL_ID}
+  PLAN: {provider: codex, model: YOUR_EXACT_MODEL_ID}
+  BUILD: {provider: codex, model: YOUR_EXACT_MODEL_ID}
+  VERIFY: {provider: codex, model: YOUR_EXACT_MODEL_ID}
+  REVIEW: {provider: claude-code, model: YOUR_EXACT_MODEL_ID}
+  SHIP: {provider: codex, model: YOUR_EXACT_MODEL_ID}
+permissions:
+  publishIssues: true
+  mergeIntermediate: true

@@ -1,0 +1,38 @@
+# Replace sample IDs with the exact configurations verified through your official CLI.
+# No model alias is resolved by Easy Skills. DEFINE records your current CLI/model.
+schemaVersion: 1
+featureId: example-feature
+title: Example feature
+spec: |
+  Describe user behavior, scope, constraints and feature acceptance criteria.
+project:
+  schemaVersion: 1
+  name: Example project
+  repository: owner/repository
+  mainBranch: main
+  remote: origin
+  githubTransport: gh
+  checks:
+    - id: test
+      command: npm
+      args: [test]
+      timeoutMs: 300000
+assignments:
+  DEFINE: {provider: codex, model: YOUR_CURRENT_EXACT_MODEL_ID}
+  PLAN: {provider: codex, model: YOUR_EXACT_MODEL_ID}
+  BUILD: {provider: codex, model: YOUR_EXACT_MODEL_ID}
+  VERIFY: {provider: codex, model: YOUR_EXACT_MODEL_ID}
+  REVIEW: {provider: claude-code, model: YOUR_EXACT_MODEL_ID}
+  SHIP: {provider: codex, model: YOUR_EXACT_MODEL_ID}
+tasks:
+  - id: first-slice
+    title: Deliver first behavior
+    description: Implement a small vertical slice.
+    dependsOn: []
+    acceptance: [Observable behavior has meaningful automated coverage.]
+rulesHash: REPLACE_WITH_OUTPUT_OF_RULES_HASH
+runnerVersion: 0.1.0-alpha.1
+skillsVersion: 0.1.0-alpha.1
+permissions:
+  publishIssues: true
+  mergeIntermediate: true

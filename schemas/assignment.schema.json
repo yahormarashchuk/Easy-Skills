@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "provider": {
+      "type": "string",
+      "enum": [
+        "codex",
+        "claude-code"
+      ]
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 150,
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$"
+    }
+  },
+  "required": [
+    "provider",
+    "model"
+  ],
+  "additionalProperties": false
+}

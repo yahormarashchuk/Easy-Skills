@@ -1,0 +1,12 @@
+{
+  "smtp": {
+    "host": "smtp.example.com",
+    "port": 465,
+    "secure": true,
+    "user": "sender@example.com",
+    "passwordEnv": "EASY_SKILLS_SMTP_PASSWORD",
+    "from": "sender@example.com",
+    "to": "recipient@example.com"
+  },
+  "remote": { "allowedAuthors": ["YOUR_GITHUB_LOGIN"] }
+}
