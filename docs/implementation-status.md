@@ -48,5 +48,7 @@ package build, all 13 skill validations, and installation/diagnosis from the gen
 npm tarball also passed. Real read-only launch and exact-session resume passed for
 Codex CLI 0.163.0 with `gpt-6.1-sol` (ChatGPT login) and Claude Code 2.1.306 with
 `claude-sonnet-5-5` (claude.ai login). Full live-provider/GitHub/SMTP acceptance remains
-separate. Per-commit Windows and Linux CI results are available in
+separate. Hosted Windows/Linux CI is unverified for the first prerelease: Actions is
+enabled, but GitHub has not registered the committed workflow, and manual dispatch
+returns HTTP 404. Check subsequent results in
 [GitHub Actions](https://github.com/yahormarashchuk/Easy-Skills/actions).
