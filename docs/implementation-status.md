@@ -5,17 +5,17 @@ Do not equate a built package or simulated acceptance run with release readiness
 
 | Area | Implemented | Outstanding validation or scope |
 | --- | --- | --- |
-| Contracts/provenance | Strict project, model, plan, stage-result and run schemas; dependency validation; pinned source revisions and licenses | Schema migrations beyond version 1 |
-| Clients | Codex/Claude adapters, diagnostic status, exact-model probes, JSON events, explicit session resume, error classification; real Codex and Claude execution/resume probes passed | Other account-specific model configurations and full autonomous client workflows still need validation |
-| Distribution | Compiled npm tarball; preview/apply installation, backups, dependency-complete skills, conservative uninstall | Registry publication and clean-machine installer acceptance |
+| Contracts/provenance | Strict project, model, plan, stage-result and run schemas; dependency validation; pinned source revisions and licenses | Schema v1 to v2 backup/migration and preserved-plan tests; future schema migrations need explicit coverage |
+| Clients | Codex output-schema/final file; Claude json-schema/structured_output; exact sessions, path/version compatibility and fresh auth checks | Earlier real probes cover the original adapter; revised flags/MCP paths and full autonomous workflows need fresh opt-in validation |
+| Distribution | Compiled npm tarball, bootstrap diagnostics, preview/apply installation, backups and conservative uninstall | Registry publication and clean-machine installer acceptance |
 | State/runner | SQLite WAL, event log, optimistic updates, process/run/resource locks, detached worker, live-child recovery guard | Full power-loss/orphan-process reconciliation across Windows reboots; automatic startup is intentionally absent |
-| Onboarding/rules | Read-only inventory, reviewable config proposal, preserved entry instructions, 13 skills and context templates | Interview quality is model-dependent; generated rules remain drafts until agreed |
+| Onboarding/rules | Read-only inventory, structured versioned rules agreement, unresolved decision procedure, six behavioral eval cases, 13 packaged skills | Interview quality remains model-dependent; eval cases are provided but not run against a live model |
 | Feature/model routing | Interactive DEFINE; read-only feature plan command routes the selected PLAN CLI/model; exact assignments in approved plans; autonomous BUILD onward | No standalone terminal interview wizard; local skill interaction is the interface |
-| GitHub/worktrees | gh transport, parent/task Issues, task/final PRs, explicit Issue closure, sequential dependency execution, owned worktrees | Real GitHub mutation/branch-protection acceptance; GitHub MCP transport not implemented |
-| Evidence/review | Deterministic check exit codes/head/logs; separate sessions; stale evidence blocked; bounded task repair | Real acceptance with production repositories and independent human reviewers |
+| GitHub/worktrees | gh transport, agreed GitHub checks/protection, async merge intents, reviewed-head reconciliation, sequential dependencies and owned worktrees | Real GitHub mutation/branch-protection acceptance; GitHub MCP transport not implemented |
+| Evidence/review | Baseline capture, cleaned failure bundles, scoped/delta context manifests, exact-head evidence and repairs bounded across commits | Real acceptance with production repositories and independent human reviewers |
 | Sync | Recovery refs, merge, conflict session using BUILD, revalidation, manual sync, preserved ambiguous merge | Broader semantic-conflict corpus and crash fault injection |
-| Notifications/remote | Durable SMTP outbox, no-mail reporting, scoped commands and question answers, expiring single-use exact-head merge code | Real SMTP/mobile decision acceptance |
-| Environments/MCP | Shared resource locks, Compose config/risk inspection, reviewed JSON config backup/probe/rollback | Managed database/schema/port provisioning, lifecycle cleanup, non-JSON client config adapters |
+| Notifications/remote | Outbox claims/leases/backoff, durable remote operation states, operation-bound merge intent, replay and crash reconciliation | Real SMTP/mobile decision acceptance |
+| Environments/MCP | Shared resource locks, Compose inspection, native Codex TOML/Claude JSON MCP setup, protocol/tool checks and VERIFY tool filtering | Managed database/schema/port provisioning and data lifecycle cleanup; managed/plugin client configurations need live validation |
 | Cleanup | Actual merged PR/head/base checks, live executor/ownership/dirty guards, exact proposal hash; no force | Branches retained; database/volume deletion deliberately unimplemented |
 | Updates/release | Version pins, backups, documented manual rollback; CI definitions for Windows/Linux; GitHub prerelease packaging | Automated updater/rollback manager; complete v1 acceptance still pending |
 
@@ -40,15 +40,16 @@ recovery, base-branch movement/conflicts, mobile/email decision, evidence-backed
 final human merge and safe cleanup on at least two technology stacks. This alpha
 does not claim that gate passed.
 
-Local verification on 2026-10-21: 23 automated tests passed on Windows, including
-parallel feature execution, exact-session quota recovery, a live orphan-child guard,
-detached worker lifecycle, blocked conflict recovery with a scoped human answer,
-PR-create response loss reconciliation, stale approvals and dirty cleanup. TypeScript,
-package build, all 13 skill validations, and installation/diagnosis from the generated
-npm tarball also passed. Real read-only launch and exact-session resume passed for
-Codex CLI 0.163.0 with `gpt-6.1-sol` (ChatGPT login) and Claude Code 2.1.306 with
-`claude-sonnet-5-5` (claude.ai login). Full live-provider/GitHub/SMTP acceptance remains
-separate. Hosted Windows/Linux CI is unverified for the first prerelease: Actions is
-enabled, but GitHub has not registered the committed workflow, and manual dispatch
-returns HTTP 404. Check subsequent results in
-[GitHub Actions](https://github.com/yahormarashchuk/Easy-Skills/actions).
+Historical validation of the original alpha on 2026-10-21 included 23 local Windows
+fixture tests, package installation and two-turn real launch/resume probes for Codex
+CLI 0.163.0 (`gpt-6.1-sol`) and Claude Code 2.1.306 (`claude-sonnet-5-5`). Those probes
+do not establish compatibility of the revised structured-output/MCP implementation.
+Current local verification and remaining limits are recorded in
+[the reliability audit](reliability-audit.md).
+
+Hosted CI was rechecked read-only on 2026-10-22. Both `test (windows-latest, 24)` and
+`test (ubuntu-latest, 24)` passed at release commit
+`fda65ecaeed91b6d7c441345fdf5f1b743175c5c` in
+[run 39625039980](https://github.com/yahormarashchuk/Easy-Skills/actions/runs/39625039980).
+The old unregistered-workflow/404 condition is resolved. The current reliability
+branch remains local and has no hosted CI result of its own.

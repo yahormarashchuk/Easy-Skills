@@ -9,7 +9,9 @@
     "url": "git+https://github.com/yahormarashchuk/Easy-Skills.git"
   },
   "homepage": "https://github.com/yahormarashchuk/Easy-Skills#readme",
-  "bugs": { "url": "https://github.com/yahormarashchuk/Easy-Skills/issues" },
+  "bugs": {
+    "url": "https://github.com/yahormarashchuk/Easy-Skills/issues"
+  },
   "bin": {
     "easy-skills": "dist/cli/index.js"
   },
@@ -30,16 +32,19 @@
   },
   "scripts": {
     "build": "tsc && node scripts/schemas.mjs && node scripts/package-skills.mjs",
-    "check": "tsc --noEmit",
+    "check": "tsc --noEmit && tsc -p tsconfig.tests.json",
     "test": "node scripts/test.mjs",
     "dev": "tsx src/cli/index.ts",
     "prepack": "npm run build",
-    "smoke:clients": "tsx scripts/smoke-clients.ts"
+    "smoke:clients": "tsx scripts/smoke-clients.ts",
+    "smoke:external": "tsx scripts/smoke-external.ts"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "commander": "^15.0.0",
     "cross-spawn": "^7.0.6",
     "nodemailer": "^10.1.7",
+    "smol-toml": "^1.9.1",
     "which": "^7.0.0",
     "yaml": "^2.9.1",
     "zod": "^4.6.7"

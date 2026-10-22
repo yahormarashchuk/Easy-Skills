@@ -14,12 +14,12 @@ test('PLAN uses the selected model read-only and cannot expand agreed permission
     const {featureId, title, spec, assignments, permissions} = f.run.plan;
     const request = {featureId, title, spec, assignments, permissions};
     let model = '', mode: string | undefined;
-    const plan = await generatePlan(f.store, f.root, request, {async run(a, p, o) {
+    const plan = await generatePlan(f.store, f.root, request, {...f.client, async run(a, p, o) {
       model = a.model; mode = o.mode; assert.match(p, /UNAPPROVED, READ-ONLY/);
       return {outcome: 'passed', summary: 'Planned', findings: [], plan: f.run.plan};
     }});
     assert.equal(model, assignments.PLAN.model); assert.equal(mode, 'read'); assert.equal(plan.tasks.length, 2);
-    await assert.rejects(generatePlan(f.store, f.root, request, {async run() {
+    await assert.rejects(generatePlan(f.store, f.root, request, {...f.client, async run() {
       return {outcome: 'passed', summary: 'Unsafe draft', findings: [], plan: {...f.run.plan, permissions: {publishIssues: false, mergeIntermediate: true}}};
     }}), /changed an agreed field: permissions/);
     assert.equal(f.github.objects.size, 0);

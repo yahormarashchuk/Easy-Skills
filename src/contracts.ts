@@ -24,29 +24,38 @@ export const Check = z.object({
   resource: z.string().min(1).optional(),
 }).strict();
 export type Check = z.infer<typeof Check>;
+export const MergePolicy = z.object({mode: z.enum(['strict', 'queue']), requiredChecks: z.array(z.object({
+  name: z.string().min(1), appId: z.number().int().positive().optional(),
+}).strict()).min(1)}).strict();
+export type MergePolicy = z.infer<typeof MergePolicy>;
 export const Project = z.object({
   schemaVersion: z.literal(1), name: z.string().min(1),
   repository: z.string().regex(/^[\w.-]+\/[\w.-]+$/),
   mainBranch: z.string().min(1), remote: z.literal('origin').default('origin'),
   githubTransport: z.literal('gh'), checks: z.array(Check).min(1),
+  mergePolicy: MergePolicy.optional(),
 }).strict();
 export type Project = z.infer<typeof Project>;
 export const Task = z.object({
   id: Identifier, title: z.string().min(1), description: z.string().min(1),
   dependsOn: z.array(Identifier).default([]), acceptance: z.array(z.string().min(1)).min(1),
+  scope: z.object({areas: z.array(Identifier), paths: z.array(z.string().min(1).refine(p => !p.startsWith('/') && !p.includes('..') && !p.includes(':') && !p.includes('\\'), 'Use repository-relative POSIX paths'))}).strict().optional(),
 }).strict();
 export type Task = z.infer<typeof Task>;
 export const Plan = z.object({
   schemaVersion: z.literal(1), featureId: Identifier, title: z.string().min(1),
   spec: z.string().min(1), project: Project, assignments: Assignments,
   tasks: z.array(Task).min(1), rulesHash: z.string().regex(/^[a-f0-9]{64}$/),
+  rulesAgreement: z.object({version: z.number().int().positive(), hash: z.string().regex(/^[a-f0-9]{64}$/)}).strict().optional(),
   runnerVersion: z.literal(VERSION), skillsVersion: z.literal(VERSION),
   permissions: z.object({publishIssues: z.boolean(), mergeIntermediate: z.boolean()}).strict(),
+  verification: z.object({diagnostics: z.array(Identifier), browserTools: z.array(z.string().regex(/^mcp__[\w-]+__[\w-]+$/))}).strict().optional(),
 }).strict().superRefine((plan, ctx) => {
   const ids = new Set(plan.tasks.map(t => t.id));
   if (ids.size !== plan.tasks.length) ctx.addIssue({code: 'custom', message: 'Duplicate task IDs'});
   if (new Set(plan.project.checks.map(c => c.id)).size !== plan.project.checks.length)
     ctx.addIssue({code: 'custom', message: 'Duplicate check IDs'});
+  for (const id of plan.verification?.diagnostics || []) if (!plan.project.checks.some(c => c.id === id)) ctx.addIssue({code: 'custom', message: 'Unknown VERIFY diagnostic: ' + id});
   const completed = new Set<string>();
   let rest = [...plan.tasks];
   while (rest.length) {
@@ -65,7 +74,7 @@ export const StageResult = z.object({
 }).strict();
 export type StageResult = z.infer<typeof StageResult>;
 export interface Evidence { checkId: string; head: string; code: number; finishedAt: string; log: string }
-export interface PullRequest { number: number; url: string; headRefOid: string; state: string; mergedAt: string | null; baseRefName: string; headRefName: string }
+export interface PullRequest { number: number; url: string; headRefOid: string; baseRefOid?: string; state: string; mergedAt: string | null; baseRefName: string; headRefName: string }
 export type Cursor = 'BUILD' | 'VERIFY' | 'REVIEW' | 'SHIP' | 'INTEGRATE';
 export interface TaskState {
   id: string; integrated: boolean; cursor: Cursor; issue?: number; pr?: PullRequest;
@@ -88,7 +97,7 @@ export interface Run {
 }
 const EvidenceSchema = z.object({checkId: Identifier, head: z.string(), code: z.number().int(), finishedAt: z.string(), log: z.string()}).strict();
 const PrSchema = z.object({number: z.number().int().positive(), url: z.string(), headRefOid: z.string(), state: z.string(),
-  mergedAt: z.string().nullable(), baseRefName: z.string(), headRefName: z.string()}).strict();
+  mergedAt: z.string().nullable(), baseRefName: z.string(), headRefName: z.string(), baseRefOid: z.string().optional()}).strict();
 const Sessions = z.object({DEFINE: z.string().optional(), PLAN: z.string().optional(), BUILD: z.string().optional(),
   VERIFY: z.string().optional(), REVIEW: z.string().optional(), SHIP: z.string().optional()}).strict();
 export const RunSchema = z.object({

@@ -7,11 +7,17 @@ Read [the workflow contract](references/workflow.md). Inspect the project's actu
 needs and existing client settings. For each proposed integration show purpose,
 permissions, data sent, and the alternative without MCP. Avoid duplicate transports.
 
-Prepare a complete JSON config preserving unrelated entries. `easy-skills mcp-config
---path <client-config> --file <proposal>` shows before/after and a hash. Apply the
-reviewed hash with an explicit probe command that verifies the server connection.
+Prepare a JSON setup proposal with client, name, server, requiredTools and an optional
+explicitly approved testCall. `easy-skills mcp-config --path <client-config> --file
+<proposal>` renders native Codex TOML or Claude JSON while preserving unrelated
+settings. Review the full diff and hash before applying it. The probe initializes
+the actual server, lists required tools and runs only the reviewed testCall, if any.
 Backup existing configuration; failed probes must not be reported as successful setup.
 
 The current executable GitHub transport is gh. GitHub MCP can be evaluated but is
 not an executable transport in this alpha. Do not claim support or silently switch.
-Client formats other than JSON need their own documented, reviewed integration.
+For Claude VERIFY, use a project `.mcp.json`; the runner loads approved servers through
+a per-assignment tool filter. Codex uses its native enabled_tools allow list. Include
+exact `mcp__server__tool` names in the reviewed plan. A code-zero command alone does
+not establish MCP connectivity. Keep credentials in official login or environment
+references, never in feature documents.

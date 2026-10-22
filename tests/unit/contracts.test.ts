@@ -32,7 +32,7 @@ test('adapter commands preserve exact model and session, use stdin and no bare o
   }
   assert.equal(decode('codex', '{"type":"thread.started","thread_id":"s1"}').session, 's1');
   assert.equal(decode('claude-code', '{"type":"system","subtype":"init","session_id":"s2"}').session, 's2');
-  assert.equal(decode('claude-code', '{"type":"result","subtype":"success","is_error":false,"result":"{\\"outcome\\":\\"passed\\",\\"summary\\":\\"ok\\",\\"findings\\":[]}"}').result?.outcome, 'passed');
+  assert.equal(decode('claude-code', JSON.stringify({type: 'result', subtype: 'success', is_error: false, structured_output: {outcome: 'passed', summary: 'ok', findings: []}})).result?.outcome, 'passed');
   assert.equal(classify('model_not_found'), 'model'); assert.equal(classify('429 rate_limit'), 'quota');
   assert.equal(classify('not logged in'), 'auth'); assert.equal(classify('ECONNRESET'), 'network');
   const reset = new Date(Date.now() + 60_000).toISOString();

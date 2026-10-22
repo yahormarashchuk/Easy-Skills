@@ -1,74 +1,141 @@
 # Easy Skills
 
-A local runner and engineering skills for Codex CLI and Claude Code, licensed under
-Apache-2.0. Work runs on the user's computer, including Windows without WSL. Users
-authenticate with their own model accounts; no separate server or mandatory model
-API keys are required.
+A local TypeScript runner and engineering skills for Codex CLI and Claude Code.
+Apache-2.0. Runs on native Windows and other Node.js 24+ hosts, using official client
+authentication. No mandatory model API key, WSL, Docker, server or dashboard.
 
-**Status: executable alpha, not a completed v1 release.** It includes sequential task
-execution, SQLite persistence, recovery, checks tied to commits, worktrees, GitHub
-through gh, notifications, remote commands and 13 installable skills. The full acceptance
-scenario still needs validation with both real clients and GitHub. See the
-[implementation matrix](docs/implementation-status.md) for the current boundaries.
+**Executable alpha; full live-provider acceptance is still pending.** The reliability
+changes described here are unreleased. The published `v0.1.0-alpha.1` asset predates
+them; use a tarball built from this checkout to try the current implementation.
+See [implementation status](docs/implementation-status.md).
+
+## Install the packaged product
+
+Install Node.js 24+, Git, GitHub CLI and the official AI clients you intend to use.
+Install a compiled Easy Skills tarball; package users do not compile TypeScript:
+
+```powershell
+npm install -g .\easy-skills-0.1.0-alpha.1.tgz
+easy-skills --version
+easy-skills bootstrap --client codex
+```
+
+Bootstrap checks prerequisites and authentication without model requests and previews
+skill installation. Review its full proposal, then repeat with `--apply-hash HASH`.
+Use `--client claude-code` for Claude skills. Existing skills get backups; modified
+files are retained by conservative uninstall. [Installation and removal](docs/installation/README.md)
+
+The previous compiled release and checksums are available on
+[GitHub](https://github.com/yahormarashchuk/Easy-Skills/releases/tag/v0.1.0-alpha.1).
+There is no npm registry publication or new GitHub release for these local changes.
+
+## Initial setup
+
+1. Sign in yourself with `gh auth login`, `codex login` and/or `claude auth login`.
+2. In the managed repository, invoke `easy-init`. It inspects current code and keeps
+   an unresolved decision tree rather than repeating questions already answered.
+3. Prepare [project.yaml](templates/project.yaml), including real checks and an agreed
+   GitHub merge policy. `easy-skills init --config FILE` previews the context files;
+   repeat with `--apply-hash HASH` after review. Generated rules remain drafts.
+4. Resolve rule conflicts, assumptions and required check prerequisites. Complete
+   `.easy-skills/decisions/onboarding.json` with explicit answers and `status: agreed`.
+   Preview `easy-skills agree-rules --file INTERVIEW.json`, review it, then apply its
+   exact hash. Agreement records the rules/configuration revision; it does not approve
+   a feature. Rule changes require a new agreement and plan.
+   Commit the reviewed project context before creating feature worktrees.
+5. Approve two small requests for each exact CLI/model configuration, then run
+   `easy-skills doctor --provider codex --model EXACT_ID --probe` (or `claude-code`).
+   This uses account quota and verifies launch plus exact-session continuation.
+
+Automatic merge requires agreed GitHub checks plus server-enforced freshness: strict
+up-to-date branch checks enforced for administrators, an active strict ruleset, or an
+effective merge queue. Protection applies to intermediate target branches too.
+Missing guarantees stop automatic merge with a reason. Easy Skills does not alter
+branch protection or bypass it. [Merge gate](docs/merge-gate.md)
+
+Optional MCP setup uses `mcp-config --path NATIVE_CONFIG --file SETUP.json` and a
+reviewed apply hash. It renders Codex TOML or Claude JSON and verifies the actual
+server's required tools. [MCP setup](docs/mcp.md)
+
+## First feature
+
+Invoke `easy-feature` to agree behavior, acceptance, scope and exact stage assignments.
+Use [the request template](templates/feature-request.yaml):
+
+```powershell
+easy-skills feature plan --file request.yaml --out execution.yaml
+easy-skills feature draft --file execution.yaml
+easy-skills feature approve RUN_ID --hash PLAN_HASH
+easy-skills start RUN_ID
+easy-skills status RUN_ID
+```
+
+Review the complete plan before approval: specification, task scopes/dependencies,
+rules agreement, models, checks, VERIFY capabilities, publication and intermediate
+merge permissions. The runner captures a baseline before BUILD. Existing failures
+or unavailable checks stop implementation for a decision; they never count as passing
+feature evidence.
+
+The detached worker survives terminal closure. Each task gets a PR into the feature
+branch. Its Issue closes after implementation, checks/review and PR publication;
+dependencies remain pending until the PR is actually merged. Features can run in
+parallel, with one task executor per feature. Queued/accepted merge requests remain
+pending. Final validation and review produce a PR into the configured main branch.
+
+Authorize final merge separately with `easy-skills merge RUN_ID --head REVIEWED_SHA`,
+or merge manually through GitHub. For remote control and email confirmation see
+[remote commands](docs/remote-control.md). After confirmed merge, preview
+`easy-skills cleanup RUN_ID` and apply the reviewed hash. Dirty/ignored private files
+block worktree deletion; branches and data volumes are retained.
+
+## Recovery and diagnostics
+
+`status RUN_ID` and `events RUN_ID` show persisted state. `pause`, `resume`, `sync` and
+`stop` operate at safe checkpoints. After reboot, run `start RUN_ID` again, including
+for a ready feature. Startup-at-login is not installed automatically.
+
+Quota/network waits preserve the exact session and assignment. A compatibility probe
+does not expire merely because 24 hours passed: the worker compares CLI path/version
+and checks authentication again. A changed client requires a reviewed probe; expired
+authentication requires official login. Unknown quota reset times use capped backoff.
+Three unresolved occurrences of the same normalized failure stop repairs even when
+each attempt makes a new commit. A new revision alone is not progress.
+
+Ready-state monitoring detects main changes, revokes readiness and repeats sync,
+checks and review. Old merge confirmations cannot authorize a different head. A live
+recorded child prevents a replacement executor. Investigate the PID before recovery.
+
+SQLite, sessions, logs and SMTP settings stay outside the repository under
+`%LOCALAPPDATA%/EasySkills` on Windows (`EASY_SKILLS_HOME` overrides it). Agents receive
+cleaned failure excerpts, not private log paths or session histories. Outbox claims
+prevent concurrent sends and retry expired leases; SMTP delivery can repeat after a
+send/acknowledgement crash, with a stable Message-ID.
+
+Schema v1 upgrades create a database backup and preserve plan hashes. Old plans without
+explicit rules agreement/merge policy stop with migration guidance. Keep the original
+run and pinned package; complete onboarding and approve a replacement plan instead of
+silently rewriting a previously approved plan. [Recovery contracts](docs/architecture/runner.md)
+
+## Develop Easy Skills
 
 ```powershell
 npm ci
-npm run build
-node dist/cli/index.js --help
-node dist/cli/index.js doctor
+npm run check
 npm test
+npm run build
 npm pack
 ```
 
-Download the compiled package from the
-[v0.1.0-alpha.1 GitHub prerelease](https://github.com/yahormarashchuk/Easy-Skills/releases/tag/v0.1.0-alpha.1),
-or install it directly:
+`check` includes tests/scripts. Tests use fixtures, temporary local Git repositories
+and injected clients/GitHub/SMTP. CI runs Windows/Linux with real integration probes
+disabled. The release commit passed both hosted jobs; this local branch has not been
+pushed. [Observed CI run](https://github.com/yahormarashchuk/Easy-Skills/actions/runs/39625039980)
 
-```sh
-npm install -g https://github.com/yahormarashchuk/Easy-Skills/releases/download/v0.1.0-alpha.1/easy-skills-0.1.0-alpha.1.tgz
-easy-skills doctor
-```
+Real checks require separate explicit permission. Set `EASY_SKILLS_ALLOW_CLIENT_PROBES=1`
+before `npm run smoke:clients -- codex EXACT_ID`. External smoke checks require both
+`EASY_SKILLS_ALLOW_EXTERNAL=1` and `--allow-external`; see
+[validation scenarios](docs/validation.md). Fixture passes do not establish real-client
+E2E, real email delivery or v1 readiness.
 
-It has not been published to the npm registry. The package contains compiled JavaScript,
-so installed-package users do not need to compile TypeScript.
-See [installation and removal](docs/installation/README.md).
-
-Typical workflow after installation:
-
-1. Install Git, gh and the official AI clients, then authenticate with the clients and gh.
-2. Run `easy-skills install-skills --client codex` or use `--client claude-code`.
-   Review the installation proposal and repeat with `--apply-hash HASH`.
-3. Invoke `easy-init` to inspect the project, agree rules and prepare project.yaml.
-   `init --config FILE` previews changes; `--apply-hash HASH` applies them.
-4. Use `easy-feature` to agree requirements and exact CLI/model assignments. Verify
-   each selected configuration with `doctor --provider codex --model EXACT_ID --probe`,
-   or use `--provider claude-code`. This uses account quota to check execution and
-   continuation of a specific session.
-5. Run the selected PLAN model with `feature plan --file request.yaml --out execution.yaml`
-   using the [request template](templates/feature-request.yaml), or prepare execution.yaml
-   using the [plan template](templates/feature.yaml). Then run
-   `feature draft --file FILE`, review the entire plan and approve it with
-   `feature approve RUN_ID --hash PLAN_HASH`.
-6. `easy-skills start RUN_ID` launches a detached worker. Use `status RUN_ID`,
-   `events RUN_ID`, `pause RUN_ID` and `resume RUN_ID` for local control.
-7. Receive a PR for each task into the feature branch and a final PR into the main
-   branch. Authorize the final merge separately with `merge RUN_ID --head REVIEWED_COMMIT`,
-   or merge manually on GitHub.
-8. After confirmed merge, run `cleanup RUN_ID`, review the resources and repeat with
-   `--apply-hash HASH`. Dirty or unowned worktrees and database contents are not removed.
-
-One task executes within a feature. A dependency is satisfied after its PR merges into
-the feature branch. Different features use separate workers and worktrees. On quota
-exhaustion, the runner preserves the session and waits without replacing the model.
-Reviews and check results refer to a specific commit; code changes require validation
-again. Main-branch merge always needs separate authorization, and GitHub protections apply.
-
-SQLite, sessions, logs and email settings live outside the repository, under
-`%LOCALAPPDATA%/EasySkills` on Windows. Override the path with `EASY_SKILLS_HOME`.
-Closing the terminal does not stop the detached worker. After a reboot, restart from
-persisted state; installation does not automatically enable startup at login.
-
-See the [product specification](docs/product-spec.md),
-[architecture](docs/architecture/runner.md), [remote control](docs/remote-control.md),
-[verified compatibility](docs/provider-compatibility/README.md),
-[procedure provenance](THIRD_PARTY_NOTICES.md) and [contributing guide](CONTRIBUTING.md).
+See [product specification](docs/product-spec.md), [client compatibility](docs/provider-compatibility/README.md),
+[procedure provenance](THIRD_PARTY_NOTICES.md) and [contributing](CONTRIBUTING.md).

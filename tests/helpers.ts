@@ -7,8 +7,10 @@ import { Engine } from '../src/runner/engine.js';
 import { Git } from '../src/git/index.js';
 import { checked } from '../src/process.js';
 import { rulesHash } from '../src/util.js';
-import type { GitHub } from '../src/github/index.js';
+import type { GitHub, MergeResult } from '../src/github/index.js';
 import type { Client } from '../src/adapters/index.js';
+import { stringify } from 'yaml';
+import { agreementProposal, applyAgreement, draftInterview, requireAgreement } from '../src/runner/onboarding.js';
 
 export async function fixture(stack = 'node') {
   const dir = mkdtempSync(join(tmpdir(), 'easy skills test ')), root = join(dir, 'project with spaces'), remote = join(dir, 'remote.git');
@@ -24,7 +26,7 @@ export async function fixture(stack = 'node') {
   writeFileSync(join(root, '.gitignore'), 'node_modules/\n__pycache__/\n');
   writeFileSync(join(root, stack === 'node' ? 'package.json' : 'pyproject.toml'), stack === 'node' ? '{"name":"example","private":true}' : '[project]\nname="example"\nversion="0.1.0"\n');
   writeFileSync(join(root, 'check.mjs'), 'import fs from "node:fs"; if (fs.existsSync("broken")) process.exit(1);\n');
-  if (stack === 'python') writeFileSync(join(root, 'check.py'), 'from pathlib import Path\nassert Path("one.txt").exists()\nassert not Path("broken").exists()\n');
+  if (stack === 'python') writeFileSync(join(root, 'check.py'), 'from pathlib import Path\nassert not Path("broken").exists()\n');
   await git.run(['add', '.']); await git.run(['commit', '-m', 'initial']);
   await git.run(['remote', 'add', 'origin', 'https://github.com/test/example.git']);
   await git.run(['config', `url.${remote.replaceAll('\\', '/')}.insteadOf`, 'https://github.com/test/example.git']);
@@ -32,18 +34,24 @@ export async function fixture(stack = 'node') {
   const store = new Store(join(dir, 'private state'));
   const assignments = Object.fromEntries(['DEFINE', 'PLAN', 'BUILD', 'VERIFY', 'REVIEW', 'SHIP'].map(stage => [stage, {provider: stage === 'REVIEW' ? 'claude-code' : 'codex', model: 'exact-' + stage}]));
   const plan = Plan.parse({schemaVersion: 1, featureId: 'sample', title: 'Sample feature', spec: 'Deliver two independent, tested behaviors.',
-    project: {schemaVersion: 1, name: 'Example', repository: 'test/example', mainBranch: 'trunk', githubTransport: 'gh',
+    project: {schemaVersion: 1, name: 'Example', repository: 'test/example', mainBranch: 'trunk', githubTransport: 'gh', mergePolicy: {mode: 'strict', requiredChecks: [{name: 'fixture-ci'}]},
       checks: [{id: 'acceptance', command: stack === 'python' ? (process.platform === 'win32' ? 'python' : 'python3') : process.execPath,
         args: [stack === 'python' ? 'check.py' : 'check.mjs']}]}, assignments,
     tasks: [{id: 'one', title: 'First', description: 'First behavior', acceptance: ['First behavior works']},
       {id: 'two', title: 'Second', description: 'Second behavior', dependsOn: ['one'], acceptance: ['Both behaviors work']}],
     rulesHash: rulesHash(root), runnerVersion: VERSION, skillsVersion: VERSION,
     permissions: {publishIssues: true, mergeIntermediate: true}});
+  mkdirSync(join(root, '.easy-skills'), {recursive: true});
+  writeFileSync(join(root, '.easy-skills/project.yaml'), stringify(plan.project));
+  const interview = {...draftInterview(), status: 'agreed', decisions: draftInterview().decisions.map(d => ({...d, status: 'resolved', answer: 'Reviewed fixture constraint'}))};
+  applyAgreement(root, interview, agreementProposal(root, interview).hash);
+  plan.rulesAgreement = requireAgreement(root);
+  await git.run(['add', '.']); await git.run(['commit', '-m', 'Agree fixture rules']); await git.push('trunk', root);
   const identity = await git.identity(), run = store.create(identity.root, identity.commonDir, plan);
-  for (const a of Object.values(plan.assignments)) store.recordProbe(a, 'fixture-1');
+  for (const a of Object.values(plan.assignments)) store.recordProbe(a, 'fixture-1', '/fixture/client');
   const github = new FakeGitHub(remote);
   const calls: string[] = [];
-  const client: Client = {async run(assignment, prompt, options) {
+  const client: Client = {async diagnose() {return {installed: true, authenticated: true, version: 'fixture-1', executable: '/fixture/client'};}, async run(assignment, prompt, options) {
     calls.push(assignment.model + ':' + options.cwd.split(/[\\/]/).pop());
     options.onSession?.(options.session || 'session-' + calls.length);
     if (assignment.model === 'exact-BUILD') writeFileSync(join(options.cwd, options.cwd.endsWith('one') ? 'one.txt' : 'two.txt'), 'tested behavior\n');
@@ -80,7 +88,7 @@ export class FakeGitHub implements GitHub {
     if (pr.state !== 'MERGED') pr.headRefOid = await checked('git', ['rev-parse', `refs/heads/${pr.headRefName}`], this.remote);
     return {...pr};
   }
-  async merge(number: number, head: string) {
+  async merge(number: number, head: string): Promise<MergeResult> {
     const pr = await this.viewPr(number);
     if (pr.headRefOid !== head) throw new Error('head mismatch');
     const base = await checked('git', ['rev-parse', `refs/heads/${pr.baseRefName}`], this.remote);
@@ -88,6 +96,7 @@ export class FakeGitHub implements GitHub {
     const commit = await checked('git', ['commit-tree', tree, '-p', base, '-p', head, '-m', 'Merge fixture PR'], this.remote);
     await checked('git', ['update-ref', `refs/heads/${pr.baseRefName}`, commit], this.remote);
     Object.assign(this.prs.get(number)!, {state: 'MERGED', mergedAt: new Date().toISOString()}); this.merges.push(number);
+    return {state: 'merged' as const};
   }
   async setIssue(number: number, open: boolean, comment: string) {this.issues.set(number, open); this.commentsWritten.push(comment);}
   async comments() {return this.issueComments;}

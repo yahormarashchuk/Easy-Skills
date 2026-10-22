@@ -21,6 +21,9 @@ import { configProposal, applyConfig } from '../integrations/config.js';
 import { inspectCompose } from '../environments/index.js';
 import { execute } from '../process.js';
 import { generatePlan } from '../runner/planning.js';
+import { agreementProposal, applyAgreement } from '../runner/onboarding.js';
+import { mcpProposal, applyMcp } from '../integrations/mcp.js';
+import { bootstrap } from './bootstrap.js';
 
 const program = new Command().name('easy-skills').version(VERSION).description('Local engineering workflow runner (alpha)');
 program.option('--project <path>', 'Project directory', process.cwd());
@@ -34,7 +37,7 @@ function cwd() {return realpathSync.native(program.opts().project);}
 function start(store: Store, id: string) {
   const run = store.get(id);
   if (store.locked('worker:' + id)) return {runId: id, attached: true, status: run.status};
-  if (!['approved', 'running', 'paused', 'needs_decision', 'waiting_quota'].includes(run.status)) throw new Error('Run is not startable');
+  if (!['approved', 'running', 'paused', 'needs_decision', 'waiting_quota', 'ready'].includes(run.status)) throw new Error('Run is not startable');
   const log = join(ensureDir(join(store.home, 'logs', id)), 'worker.log');
   const fd = openSync(log, 'a', 0o600);
   // The installed CLI runs as JavaScript; inherit execArgv so source mode can use tsx as well.
@@ -45,9 +48,19 @@ function start(store: Store, id: string) {
   return {runId: id, pid: child.pid, log, status: 'starting'};
 }
 program.command('inspect').description('Read-only project inventory').action(async () => output(await inspectProject(cwd())));
+program.command('bootstrap').requiredOption('--client <provider>', 'codex or claude-code')
+  .option('--target <directory>', 'Override the client skill directory').option('--apply-hash <hash>', 'Apply the reviewed bootstrap')
+  .action(async opts => {
+    const provider = Assignment.parse({provider: opts.client, model: 'diagnostic-only'}).provider;
+    const target = opts.target || join(homedir(), provider === 'codex' ? '.agents' : '.claude', 'skills');
+    output(await bootstrap(cwd(), provider, target, opts.applyHash));
+  });
 program.command('init').requiredOption('--config <file>', 'Proposed project YAML').option('--apply-hash <hash>', 'Apply the reviewed onboarding proposal')
   .action(async opts => output(await initProject(cwd(), read(opts.config), opts.applyHash)));
 program.command('rules-hash').action(() => output({rulesHash: rulesHash(cwd())}));
+program.command('agree-rules').requiredOption('--file <json>', 'Completed interview with explicit resolved decisions')
+  .option('--apply-hash <hash>', 'Approve the reviewed agreement revision')
+  .action(opts => output(opts.applyHash ? applyAgreement(cwd(), read(opts.file), opts.applyHash) : agreementProposal(cwd(), read(opts.file))));
 program.command('doctor').option('--provider <name>', 'codex or claude-code').option('--model <id>', 'Exact model ID for --probe')
   .option('--probe', 'Run a read-only model request and resume its exact session (uses your account quota)')
   .action(async opts => {
@@ -67,7 +80,7 @@ program.command('doctor').option('--provider <name>', 'codex or claude-code').op
         if (!session || first.outcome !== 'passed') throw new Error('Probe did not produce a valid persisted session');
         const resumed = await client.run(assignment, prompt, {cwd: cwd(), session, mode: 'read', timeoutMs: 120_000});
         if (resumed.outcome !== 'passed') throw new Error('Exact-session resume failed');
-        await withStore(store => store.recordProbe(assignment, diagnostic.version!));
+        await withStore(store => store.recordProbe(assignment, diagnostic.version!, diagnostic.executable));
         Object.assign(result, {modelVerified: true, sessionResumeVerified: true, session});
       }
       results.push(result);
@@ -108,8 +121,9 @@ program.command('start <id>').option('--foreground', 'Run one execution pass att
 program.command('resume <id>').description('Resume the approved plan and exact recorded sessions')
   .action(async id => withStore(store => {
     const run = store.get(id);
-    if (!['paused', 'needs_decision', 'waiting_quota'].includes(run.status)) throw new Error('Run is not resumable');
-    store.recordOperation(`${id}:resume-request`, id, 'local.resume', {resume: true}); output(start(store, id));
+    if (!['paused', 'needs_decision', 'waiting_quota', 'ready'].includes(run.status)) throw new Error('Run is not resumable');
+    if (run.status !== 'ready') store.recordOperation(`${id}:resume-request`, id, 'local.resume', {resume: true});
+    output(start(store, id));
   }));
 program.command('pause <id>').action(async id => withStore(store => {new Engine(store).requestControl(id, 'pause'); output({runId: id, requested: 'pause', at: 'next safe checkpoint'});}));
 program.command('stop <id>').action(async id => withStore(store => {new Engine(store).requestControl(id, 'stop'); output({runId: id, requested: 'stop', at: 'next safe checkpoint'});}));
@@ -148,15 +162,12 @@ program.command('mail-test').description('Verify the configured SMTP connection'
   output({verified: await mailTransport(config).verify()});
 }));
 program.command('notify').action(async () => withStore(async store => output(await flushNotifications(store))));
-program.command('mcp-config').requiredOption('--path <json>', 'Exact client JSON config to review')
-  .requiredOption('--file <json>', 'Complete proposed JSON configuration (preserve existing unrelated settings)')
-  .option('--apply-hash <hash>').option('--probe <file>', 'JSON {command,args} for the connection check')
+program.command('mcp-config').requiredOption('--path <file>', 'Native Codex TOML or Claude JSON configuration')
+  .requiredOption('--file <json>', 'Reviewed client/name/server/requiredTools and optional testCall')
+  .option('--apply-hash <hash>')
   .action(async opts => {
     const value = JSON.parse(readFileSync(resolve(opts.file), 'utf8'));
-    if (!opts.applyHash) {output(configProposal(opts.path, value)); return;}
-    if (!opts.probe) throw new Error('A connection probe is required');
-    const check = (await import('../contracts.js')).Check.parse({id: 'mcp-probe', ...read(opts.probe)});
-    output(await applyConfig(opts.path, value, opts.applyHash, check, cwd()));
+    output(opts.applyHash ? await applyMcp(opts.path, value, opts.applyHash, cwd()) : mcpProposal(opts.path, value));
   });
 program.command('inspect-compose').requiredOption('--file <yaml>').requiredOption('--feature <id>')
   .action(async opts => output(await inspectCompose(resolve(opts.file), opts.feature, cwd())));

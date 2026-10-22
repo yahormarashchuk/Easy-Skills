@@ -67,6 +67,45 @@
         ],
         "additionalProperties": false
       }
+    },
+    "mergePolicy": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "strict",
+            "queue"
+          ]
+        },
+        "requiredChecks": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "appId": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "mode",
+        "requiredChecks"
+      ],
+      "additionalProperties": false
     }
   },
   "required": [

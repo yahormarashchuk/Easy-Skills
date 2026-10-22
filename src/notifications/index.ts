@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import nodemailer from 'nodemailer';
 import { z } from 'zod';
 import { Store } from '../persistence/store.js';
+import { randomUUID } from 'node:crypto';
 
 export const LocalSettings = z.object({
   smtp: z.object({host: z.string().min(1), port: z.number().int().min(1).max(65535),
@@ -22,20 +23,22 @@ export function mailTransport(config: NonNullable<LocalSettings['smtp']>) {
     requireTLS: !config.secure, auth: config.user ? {user: config.user, pass} : undefined,
     connectionTimeout: 15_000, greetingTimeout: 15_000, socketTimeout: 30_000});
 }
-export async function flushNotifications(store: Store): Promise<{sent: number; pending: number; configured: boolean}> {
+export async function flushNotifications(store: Store, options: {transport?: {sendMail(mail: any): Promise<unknown>}} = {}): Promise<{sent: number; pending: number; configured: boolean}> {
   const config = settings(store).smtp, pending = store.pendingNotifications();
   if (!config) return {sent: 0, pending: pending.length, configured: false};
-  const transport = mailTransport(config);
+  const transport = options.transport || mailTransport(config), owner = randomUUID();
   let sent = 0;
-  for (const row of pending) {
+  for (;;) {
+    const row = store.claimNotification(owner);
+    if (!row) break;
     const payload = JSON.parse(String(row.payload));
     try {
       await transport.sendMail({from: {name: 'Easy Skills', address: config.from}, to: config.to,
         messageId: `<${String(row.key).replace(/[^a-zA-Z0-9-]/g, '-')}@easy-skills.local>`,
         subject: `[Easy Skills][${payload.project}][${payload.feature}] ${payload.state}`,
         text: `${payload.reason}\n\nState: ${payload.state}\n${payload.url || ''}`});
-      store.markSent(String(row.key)); sent++;
-    } catch (e) {store.markAttempt(String(row.key)); throw e;}
+      if (store.completeNotification(String(row.key), owner)) sent++;
+    } catch {store.retryNotification(String(row.key), owner, Number(row.attempts));}
   }
-  return {sent, pending: pending.length - sent, configured: true};
+  return {sent, pending: store.pendingNotifications().length, configured: true};
 }

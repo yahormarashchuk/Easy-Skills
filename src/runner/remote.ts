@@ -1,6 +1,8 @@
 import { randomInt } from 'node:crypto';
 import type { Run } from '../contracts.js';
-import { Store } from '../persistence/store.js';
+import { Store, ResourceBusy } from '../persistence/store.js';
+import { ClientError, classify } from '../adapters/index.js';
+import { hash, message, redact } from '../util.js';
 import { Gh, type GitHub } from '../github/index.js';
 import { Engine } from './engine.js';
 import { mailTransport, settings } from '../notifications/index.js';
@@ -50,18 +52,49 @@ export async function requestMergeDecision(store: Store, run: Run): Promise<stri
 export async function pollRemote(store: Store, run: Run, engine: Engine, github?: GitHub): Promise<void> {
   const config = settings(store).remote;
   if (!config || !run.parentIssue) return;
+  let owner: string;
+  try {owner = store.acquire('remote:' + run.id);} catch (e) {if (e instanceof ResourceBusy) return; throw e;}
+  try {
   const gh = github || new Gh(run.plan.project.repository, run.root);
   for (const comment of await gh.comments(run.parentIssue)) {
     const key = `${run.id}:remote:${comment.id}`;
-    if (store.operation(key)) continue;
+    const prior = store.operation<RemoteOperation>(key);
+    if (prior?.state === 'succeeded' || prior?.state === 'rejected') continue;
     const command = parseCommand(comment.body);
     // Ordinary discussion is never executable input.
     if (!command) continue;
-    store.recordOperation(key, run.id, 'remote.received', {received: true});
-    if (!config.allowedAuthors.includes(comment.author) || command.runId !== run.id || command.planHash !== run.planHash) {
-      store.event(run.id, 'remote.rejected', {comment: comment.id}); continue;
+    const binding = hash({body: comment.body, author: comment.author});
+    const operation: RemoteOperation = prior || {state: 'received', binding, attempts: 0};
+    const save = (state: RemoteOperation['state'], reason?: string) => {
+      Object.assign(operation, {state, reason});
+      store.recordOperation(key, run.id, 'remote.' + state, operation);
+      store.event(run.id, 'remote.' + state, {comment: comment.id, action: command.action, reason});
+    };
+    if (!prior) save('received');
+    const current = store.get(run.id);
+    if (operation.binding !== binding || !config.allowedAuthors.includes(comment.author) || command.runId !== run.id || command.planHash !== current.planHash) {
+      save('rejected', 'Author, command binding or approved plan changed'); continue;
     }
     try {
+      if (command.action === 'confirm') {
+        if (current.finalReviewHead !== command.head || !['ready', 'merged'].includes(current.status)) throw new Error('Stale merge revision or readiness');
+        store.transaction(() => {
+          store.consumeDecision(command.request, current, command.head, 'final-merge', command.code, key);
+          save('validated');
+        });
+        operation.attempts++; save('executing');
+        if (current.status !== 'merged') await engine.confirmFinalMerge(run.id, command.head);
+        save('succeeded');
+        continue;
+      }
+      // Local effects and their completion marker commit together. Network I/O stays outside transactions.
+      if (command.action === 'status') {
+        save('validated'); operation.attempts++; save('executing');
+        await gh.commentOnce(run.parentIssue, key + ':status', `Easy Skills state: ${current.status}; plan ${run.planHash}.`);
+        save('succeeded'); continue;
+      }
+      store.transaction(() => {
+      save('validated'); operation.attempts++; save('executing');
       if (command.action === 'pause' || command.action === 'stop') engine.requestControl(run.id, command.action);
       else if (command.action === 'resume') {
         // Resume cannot approve a draft, replace its model, or expand permissions.
@@ -69,11 +102,18 @@ export async function pollRemote(store: Store, run: Run, engine: Engine, github?
         store.recordOperation(`${run.id}:resume-request`, run.id, 'remote.resume', {resume: true});
       } else if (command.action === 'answer') {
         answerDecision(store, run.id, command.request, command.answer);
-      } else if (command.action === 'confirm') {
-        store.consumeDecision(command.request, store.get(run.id), command.head, 'final-merge', command.code);
-        await engine.confirmFinalMerge(run.id, command.head);
-      } else await gh.commentOnce(run.parentIssue, key + ':status', `Easy Skills state: ${store.get(run.id).status}; plan ${run.planHash}.`);
-      store.event(run.id, 'remote.applied', {comment: comment.id, action: command.action});
-    } catch {store.event(run.id, 'remote.rejected', {comment: comment.id, action: command.action});}
+      }
+      save('succeeded');
+      });
+    } catch (error) {
+      const transient = error instanceof ResourceBusy || (error instanceof ClientError && ['quota', 'network'].includes(error.kind)) || ['quota', 'network'].includes(classify(message(error)));
+      save(transient ? 'transient_failed' : 'rejected', redact(message(error)));
+    }
   }
+  } finally {store.release('remote:' + run.id, owner);}
+}
+
+interface RemoteOperation {
+  state: 'received' | 'validated' | 'executing' | 'succeeded' | 'transient_failed' | 'rejected';
+  binding: string; attempts: number; reason?: string;
 }

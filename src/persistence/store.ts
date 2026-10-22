@@ -12,6 +12,7 @@ export class ResourceBusy extends Error {}
 export class Store {
   readonly db: DatabaseSync;
   readonly home: string;
+  private transactionDepth = 0;
   constructor(home = stateHome()) {
     this.home = ensureDir(home);
     this.db = new DatabaseSync(join(home, 'runner.db'));
@@ -26,14 +27,29 @@ export class Store {
       CREATE TABLE IF NOT EXISTS probes (key TEXT PRIMARY KEY, checked_at TEXT NOT NULL, version TEXT NOT NULL);
     `);
     const schema = this.db.prepare('SELECT value FROM meta WHERE key=?').get('schema');
-    if (schema && schema.value !== '1') throw new Error('Unsupported database schema; use the matching runner version');
-    this.db.prepare('INSERT OR IGNORE INTO meta VALUES (?,?)').run('schema', '1');
+    if (schema && !['1', '2'].includes(String(schema.value))) throw new Error('Unsupported database schema; use the matching runner version');
+    if (schema?.value === '1') this.db.prepare('VACUUM INTO ?').run(join(home, `runner-before-v2-${Date.now()}-${randomUUID()}.db`));
+    if (!schema || schema.value === '1') this.transaction(() => {
+      // Another process may have migrated after discovery but before BEGIN IMMEDIATE.
+      const current = this.db.prepare('SELECT value FROM meta WHERE key=?').get('schema');
+      if (current?.value === '2') return;
+      if (current && current.value !== '1') throw new Error('Database schema changed while opening; use the matching runner version');
+      this.db.exec(`ALTER TABLE notifications ADD COLUMN lease_owner TEXT;
+        ALTER TABLE notifications ADD COLUMN lease_until TEXT;
+        ALTER TABLE notifications ADD COLUMN retry_at TEXT;
+        ALTER TABLE decisions ADD COLUMN operation_key TEXT;
+        ALTER TABLE probes ADD COLUMN executable TEXT;`);
+      this.db.prepare('INSERT OR REPLACE INTO meta VALUES (?,?)').run('schema', '2');
+    });
   }
   close() {this.db.close();}
   transaction<T>(fn: () => T): T {
-    this.db.exec('BEGIN IMMEDIATE');
-    try {const result = fn(); this.db.exec('COMMIT'); return result;}
-    catch (e) {this.db.exec('ROLLBACK'); throw e;}
+    const level = this.transactionDepth;
+    this.db.exec(level ? `SAVEPOINT nested_${level}` : 'BEGIN IMMEDIATE');
+    this.transactionDepth++;
+    try {const result = fn(); this.db.exec(level ? `RELEASE nested_${level}` : 'COMMIT'); return result;}
+    catch (e) {this.db.exec(level ? `ROLLBACK TO nested_${level}; RELEASE nested_${level}` : 'ROLLBACK'); throw e;}
+    finally {this.transactionDepth--;}
   }
   create(root: string, commonDir: string, plan: Plan): Run {
     for (const repository of [root, resolve(commonDir, '..')]) {
@@ -117,29 +133,48 @@ export class Store {
   pendingNotifications() {return this.db.prepare('SELECT * FROM notifications WHERE sent_at IS NULL').all();}
   markSent(key: string) {this.db.prepare('UPDATE notifications SET sent_at=?,attempts=attempts+1 WHERE key=?').run(now(), key);}
   markAttempt(key: string) {this.db.prepare('UPDATE notifications SET attempts=attempts+1 WHERE key=?').run(key);}
-  probeKey(assignment: unknown) {return hash(assignment);}
-  recordProbe(assignment: unknown, version: string) {
-    this.db.prepare('INSERT INTO probes VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET checked_at=excluded.checked_at,version=excluded.version')
-      .run(this.probeKey(assignment), now(), version);
+  claimNotification(owner: string, leaseMs = 120_000) {
+    return this.transaction(() => {
+      const row = this.db.prepare(`SELECT * FROM notifications WHERE sent_at IS NULL
+        AND (retry_at IS NULL OR retry_at<=?) AND (lease_until IS NULL OR lease_until<=?) ORDER BY rowid LIMIT 1`).get(now(), now());
+      if (!row) return undefined;
+      this.db.prepare('UPDATE notifications SET lease_owner=?,lease_until=? WHERE key=?')
+        .run(owner, new Date(Date.now() + leaseMs).toISOString(), row.key!);
+      return row;
+    });
   }
-  hasProbe(assignment: unknown): boolean {
-    const row = this.db.prepare('SELECT checked_at FROM probes WHERE key=?').get(this.probeKey(assignment));
-    return !!row && Date.now() - Date.parse(String(row.checked_at)) < 24 * 60 * 60 * 1000;
+  completeNotification(key: string, owner: string): boolean {
+    return this.db.prepare('UPDATE notifications SET sent_at=?,lease_owner=NULL,lease_until=NULL,attempts=attempts+1 WHERE key=? AND lease_owner=?')
+      .run(now(), key, owner).changes === 1;
+  }
+  retryNotification(key: string, owner: string, attempts: number) {
+    this.db.prepare('UPDATE notifications SET lease_owner=NULL,lease_until=NULL,retry_at=?,attempts=attempts+1 WHERE key=? AND lease_owner=?')
+      .run(new Date(Date.now() + Math.min(60_000 * 2 ** Math.min(attempts, 8), 4 * 60 * 60_000)).toISOString(), key, owner);
+  }
+  probeKey(assignment: unknown) {return hash(assignment);}
+  recordProbe(assignment: unknown, version: string, executable?: string) {
+    this.db.prepare('INSERT INTO probes(key,checked_at,version,executable) VALUES (?,?,?,?) ON CONFLICT(key) DO UPDATE SET checked_at=excluded.checked_at,version=excluded.version,executable=excluded.executable')
+      .run(this.probeKey(assignment), now(), version, executable || null);
+  }
+  hasProbe(assignment: unknown, identity?: {version?: string; executable?: string}): boolean {
+    const row = this.db.prepare('SELECT * FROM probes WHERE key=?').get(this.probeKey(assignment));
+    return !!row && (identity ? !!identity.executable && !!identity.version && row.version === identity.version && row.executable === identity.executable
+      : Date.now() - Date.parse(String(row.checked_at)) < 24 * 60 * 60 * 1000);
   }
   createDecision(run: Run, head: string, action: string, code: string, ttlMs = 15 * 60_000): string {
     const id = randomUUID();
-    this.db.prepare('INSERT INTO decisions VALUES (?,?,?,?,?,?,?,NULL)').run(
+    this.db.prepare('INSERT INTO decisions(id,run_id,plan_hash,head,action,code_hash,expires_at,consumed_at) VALUES (?,?,?,?,?,?,?,NULL)').run(
       id, run.id, run.planHash, head, action, hash(code), new Date(Date.now() + ttlMs).toISOString());
     return id;
   }
-  consumeDecision(id: string, run: Run, head: string, action: string, code: string): void {
+  consumeDecision(id: string, run: Run, head: string, action: string, code: string, operationKey?: string): void {
     this.transaction(() => {
       const row = this.db.prepare('SELECT * FROM decisions WHERE id=?').get(id);
       const digest = Buffer.from(hash(code));
       if (!row || row.run_id !== run.id || row.plan_hash !== run.planHash || row.head !== head || row.action !== action ||
-        row.consumed_at || Date.parse(String(row.expires_at)) < Date.now() ||
+        (row.consumed_at ? !operationKey || row.operation_key !== operationKey : Date.parse(String(row.expires_at)) < Date.now()) ||
         !timingSafeEqual(Buffer.from(String(row.code_hash)), digest)) throw new Error('Invalid, expired, stale, or already consumed decision');
-      this.db.prepare('UPDATE decisions SET consumed_at=? WHERE id=?').run(now(), id);
+      this.db.prepare('UPDATE decisions SET consumed_at=COALESCE(consumed_at,?),operation_key=? WHERE id=?').run(now(), operationKey || null, id);
     });
   }
 }

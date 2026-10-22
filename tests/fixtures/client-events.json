@@ -1,0 +1,22 @@
+{
+  "codexLaunch": [
+    {"type":"thread.started","thread_id":"fixture-session"},
+    {"type":"turn.started"},
+    {"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"Intermediate observation, never the final result channel"}},
+    {"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}
+  ],
+  "codexResume": [
+    {"type":"thread.started","thread_id":"fixture-session"},
+    {"type":"turn.started"},
+    {"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}
+  ],
+  "claudeLaunch": [
+    {"type":"system","subtype":"init","session_id":"fixture-session","model":"fixture-exact","tools":["Read","Glob","Grep"]},
+    {"type":"assistant","session_id":"fixture-session","message":{"model":"fixture-exact","content":[{"type":"text","text":"Intermediate prose"}]}},
+    {"type":"result","subtype":"success","is_error":false,"session_id":"fixture-session","result":"prose is ignored","structured_output":{"outcome":"passed","summary":"authoritative final","findings":[],"question":null},"modelUsage":{"fixture-exact":{"inputTokens":1,"outputTokens":1}}}
+  ],
+  "claudeResume": [
+    {"type":"system","subtype":"init","session_id":"fixture-session","model":"fixture-exact","tools":["Read","Glob","Grep"]},
+    {"type":"result","subtype":"success","is_error":false,"session_id":"fixture-session","structured_output":{"outcome":"passed","summary":"authoritative final","findings":[],"question":null}}
+  ]
+}

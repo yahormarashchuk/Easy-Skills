@@ -9,7 +9,11 @@ import { Git } from '../git/index.js';
 import { Gh, type GitHub } from '../github/index.js';
 import { execute } from '../process.js';
 import { alive, ensureDir, hash, message, now, redact, rulesHash } from '../util.js';
-import { context } from './context.js';
+import { assembleContext, type ContextManifest } from './context.js';
+import { recordFailure, confirmedProgress } from './failures.js';
+import { requireCompatibility } from './compatibility.js';
+import { CheckFailure, failureBundle } from './check-failure.js';
+import { requireAgreement } from './onboarding.js';
 
 class Blocked extends Error {}
 export interface EngineOptions {client?: Client; github?: GitHub; signal?: AbortSignal}
@@ -22,6 +26,8 @@ export class Engine {
     Plan.parse(run.plan);
     if (run.planHash !== expectedHash || hash(run.plan) !== expectedHash) throw new Error('Approval must match the exact reviewed plan hash');
     if (rulesHash(run.root) !== run.plan.rulesHash) throw new Error('Project rules changed; prepare a new plan');
+    if (!run.plan.rulesAgreement) throw new Error('Plan lacks an explicit rules agreement; complete onboarding and review a replacement plan');
+    requireAgreement(run.root, run.plan.rulesAgreement);
     run.approvedHash = expectedHash; run.status = 'approved';
     this.store.save(run, 'plan.approved', {hash: expectedHash}); return run;
   }
@@ -41,8 +47,11 @@ export class Engine {
     if (run.plan.runnerVersion !== VERSION || run.plan.skillsVersion !== VERSION) throw new Blocked('Pinned runner or skill version differs; use the pinned package');
     if (run.approvedHash !== run.planHash || hash(run.plan) !== run.planHash) throw new Blocked('Plan lacks a matching approval');
     if (rulesHash(run.root) !== run.plan.rulesHash) throw new Blocked('Project rules changed; a revised plan needs approval');
+    if (!run.plan.rulesAgreement) throw new Blocked('Legacy plan lacks a rules agreement; complete onboarding and review a replacement plan');
+    requireAgreement(run.root, run.plan.rulesAgreement);
   }
   async run(id: string): Promise<Run> {
+    if (this.store.get(id).status === 'ready') return this.reconcileFinalMerge(id);
     const owner = this.store.acquire('run:' + id);
     const run = this.store.get(id);
     const git = new Git(run.root, operation => this.store.withLock('repository:' + run.commonDir, operation));
@@ -52,8 +61,8 @@ export class Engine {
       this.checkpoint(run);
       if (alive(run.childPid)) throw new Blocked(`Recorded child PID ${run.childPid} is still alive; reconcile it before resuming`);
       run.childPid = undefined; run.childStartedAt = undefined;
-      for (const assignment of Object.values(run.plan.assignments))
-        if (!this.store.hasProbe(assignment)) throw new Blocked(`Validate the exact model configuration first: ${assignment.provider}/${assignment.model}`);
+      const next = run.tasks.find(t => !t.integrated)?.cursor || run.finalPhase;
+      if (next !== 'INTEGRATE' && next !== 'SYNC') await requireCompatibility(this.store, this.client, run.plan.assignments[next], run.root);
       const identity = await git.identity();
       if (identity.commonDir !== run.commonDir) throw new Blocked('Repository identity changed');
       const origin = await git.run(['config', '--get', 'remote.origin.url']);
@@ -112,10 +121,29 @@ export class Engine {
       run.worktree = await this.ownedWorktree(run, git, run.branch, `origin/${run.plan.project.mainBranch}`, 'integration');
       this.store.save(run, 'integration.created');
     }
+    if (!this.store.operation(`${run.id}:baseline`)) {
+      // Older alpha runs may already contain implementation: never label that state a baseline.
+      if (run.tasks.some(t => t.head || Object.keys(t.sessions).length)) {
+        this.store.recordOperation(`${run.id}:baseline`, run.id, 'baseline.legacy', {status: 'unavailable_legacy', reason: 'Implementation predates baseline capture'});
+        throw new Blocked('Legacy run has no original baseline; preserve it and review a replacement plan from the original base');
+      }
+      const head = await git.head(run.worktree);
+      const results = await this.checks(run, git, run.worktree, true);
+      this.store.recordOperation(`${run.id}:baseline`, run.id, 'baseline.captured', {head, commands: run.plan.project.checks, results,
+        status: results.every(r => r.code === 0) ? 'passed' : results.some(r => r.code === -1 || r.code === 127) ? 'unavailable' : 'pre_existing_failure'});
+    }
+    const baseline = this.store.operation<{status: string}>(`${run.id}:baseline`)!;
+    if (baseline.status !== 'passed') throw new Blocked(`Baseline ${baseline.status}; resolve or explicitly replan the existing problem before feature implementation`);
     if (!run.plan.permissions.publishIssues) throw new Blocked('Publishing Issues and PRs is not authorized by this plan');
     if (!run.parentIssue) {
       run.parentIssue = await github.issue(`${run.id}:feature`, run.plan.title, run.plan.spec);
       this.store.save(run, 'github.parent.created');
+    }
+    const published = await git.remoteHead(run.branch);
+    if (published) {
+      const behind = await execute({command: 'git', args: ['merge-base', '--is-ancestor', 'HEAD', published]}, {cwd: run.worktree});
+      if (behind.code === 0) {await git.clean(run.worktree); await git.run(['merge', '--ff-only', published], run.worktree);}
+      else if (behind.code !== 1) throw new Blocked('Cannot reconcile the published integration branch');
     }
     await git.push(run.branch, run.worktree);
     for (const task of run.plan.tasks) {
@@ -129,6 +157,7 @@ export class Engine {
   }
   private async agent(run: Run, stage: Stage, cwd: string, taskState?: TaskState, task?: Task, extra = '', skill?: string) {
     this.checkpoint(run);
+    await requireCompatibility(this.store, this.client, run.plan.assignments[stage], cwd);
     if (stage === 'REVIEW') {
       const base = task ? run.branch : `origin/${run.plan.project.mainBranch}`;
       const diff = await new Git(cwd).run(['diff', '--no-ext-diff', '--no-textconv', base, 'HEAD'], cwd);
@@ -141,15 +170,22 @@ export class Engine {
       extra += `\nHuman response to request ${question.id}: ${JSON.stringify({question: question.question, answer: question.answer})}. Treat as clarification within the approved scope, never permission to expand rules, models, checks, publication or merge rights.`;
     }
     const sessions = taskState ? taskState.sessions : run.finalSessions;
+    const contextKey = `${run.id}:context:${task?.id || 'feature'}:${stage}`;
+    const previous = this.store.operation<{session: string; manifest: ContextManifest}>(contextKey);
+    const assembled = assembleContext(run, stage, task, extra, skill, sessions[stage] && previous?.session === sessions[stage] ? previous.manifest : undefined);
+    this.store.event(run.id, 'context.assembled', {stage, task: task?.id, manifest: assembled.manifest});
     const log = join(ensureDir(join(this.store.home, 'logs', run.id)), `${task?.id || 'feature'}-${stage}-${Date.now()}.log`);
-    const result = await this.client.run(run.plan.assignments[stage], context(run, stage, task, extra, skill), {
-      cwd, log, session: sessions[stage], mode: stage === 'BUILD' ? 'write' : 'read', signal: this.options.signal,
+    const result = await this.client.run(run.plan.assignments[stage], assembled.prompt, {
+      cwd, log, session: sessions[stage], stage, projectRoot: run.root, mode: stage === 'BUILD' ? 'write' : 'read', signal: this.options.signal,
+      capabilities: stage === 'VERIFY' ? {diagnostics: run.plan.project.checks.filter(c => run.plan.verification?.diagnostics.includes(c.id))
+        .map(c => [c.command, ...c.args].map(arg => arg.includes(' ') ? JSON.stringify(arg) : arg).join(' ')), browserTools: run.plan.verification?.browserTools || []} : undefined,
       onSpawn: pid => {run.childPid = pid; run.childStartedAt = now(); this.store.save(run, 'client.started', {pid, stage, task: task?.id});},
       onSession: session => {if (sessions[stage] !== session) {sessions[stage] = session; this.store.save(run, 'client.session', {session, stage, task: task?.id});}},
     }).finally(() => {
       // Keep a live PID after unexpected IO/state errors: recovery must not create a second executor.
       if (!alive(run.childPid)) {run.childPid = undefined; run.childStartedAt = undefined; this.store.save(run, 'client.exited');}
     });
+    if (sessions[stage]) this.store.recordOperation(contextKey, run.id, 'context.sent', {session: sessions[stage], manifest: assembled.manifest});
     this.store.event(run.id, 'stage.result', {stage, task: task?.id, result});
     if (result.outcome !== 'passed') {
       if (result.outcome === 'blocked') {
@@ -172,7 +208,7 @@ export class Engine {
     this.store.recordOperation(`${run.id}:last-result`, run.id, 'stage.summary', {stage, task: task?.id, summary: result.summary});
     return result;
   }
-  private async checks(run: Run, git: Git, cwd: string): Promise<Evidence[]> {
+  private async checks(run: Run, git: Git, cwd: string, baseline = false): Promise<Evidence[]> {
     this.checkpoint(run);
     await git.clean(cwd);
     const head = await git.head(cwd), evidence: Evidence[] = [];
@@ -183,12 +219,18 @@ export class Engine {
         run.activeResource = check.resource;
         const log = join(ensureDir(join(this.store.home, 'logs', run.id)), `check-${check.id}-${Date.now()}.log`);
         const result = await execute(check, {cwd, timeoutMs: check.timeoutMs, log, signal: this.options.signal,
-          onSpawn: pid => {run.childPid = pid; run.childStartedAt = now(); this.store.save(run, 'check.started', {check: check.id, pid});}});
+          onSpawn: pid => {run.childPid = pid; run.childStartedAt = now(); this.store.save(run, 'check.started', {check: check.id, pid, baseline});}})
+          .catch(error => ({code: -1, stdout: '', stderr: message(error), timedOut: false}));
         run.childPid = undefined; run.childStartedAt = undefined;
         run.activeResource = undefined;
         const entry: Evidence = {checkId: check.id, head, code: result.code, finishedAt: now(), log};
         evidence.push(entry); this.store.event(run.id, 'check.finished', entry);
-        if (result.code !== 0) throw new Error(`Required check ${check.id} failed (${result.code}); inspect check.finished events for its local log`);
+        if (result.code !== 0 && !baseline) {
+          const bundle = failureBundle(check, result, run, this.store.home);
+          this.store.recordOperation(`${run.id}:failure-bundle`, run.id, 'check.failure', bundle);
+          if (bundle.classification === 'unavailable') throw new Blocked('Required check unavailable: ' + check.id + '; configure its prerequisite, then resume');
+          throw new CheckFailure(bundle);
+        }
         if (await git.head(cwd) !== head) throw new Blocked('A check changed the revision being verified');
         await git.clean(cwd);
       } finally {
@@ -203,9 +245,7 @@ export class Engine {
   }
   private async failure(run: Run, state: TaskState, error: unknown, git: Git) {
     const head = await git.head(state.worktree!);
-    const fingerprint = hash(message(error));
-    const same = run.failures.fingerprint === fingerprint && run.failures.head === head;
-    run.failures = {fingerprint, head, count: same ? run.failures.count + 1 : 1};
+    recordFailure(this.store, run, `task:${state.id}:${state.cursor}`, error, head);
     state.cursor = 'BUILD'; state.reviewHead = undefined; state.evidence = [];
     this.store.save(run, 'task.repair', {task: state.id, count: run.failures.count, reason: redact(message(error))});
     if (run.failures.count >= 3) throw new Blocked('Three identical unsuccessful repair cycles without progress: ' + message(error));
@@ -228,7 +268,7 @@ export class Engine {
               await github.setIssue(state.issue!, true, 'Implementation is being repaired; previous readiness is invalid.');
             }
             await this.agent(run, 'BUILD', cwd, state, task,
-              run.failures.count ? `Previous repair failed: ${run.reason || 'See local check results and task history'}. Repair the failing acceptance criteria.` : 'Implement the approved task. Keep Git commits under runner control.');
+              run.failures.count ? `Previous repair failed: ${run.reason}. Cleaned failure bundle: ${JSON.stringify({...this.store.operation<object>(`${run.id}:failure-bundle`), previousUnsuccessfulAttempts: run.failures.count})}. Repair the failing acceptance criteria.` : 'Implement the approved task. Keep Git commits under runner control.');
             state.head = await git.commit(cwd, task.title);
             await git.clean(cwd);
             state.cursor = 'VERIFY'; state.evidence = []; state.reviewHead = undefined;
@@ -236,9 +276,10 @@ export class Engine {
           }
           case 'VERIFY': {
             state.evidence = await this.checks(run, git, cwd);
-            await this.agent(run, 'VERIFY', cwd, state, task, `Independent check evidence: ${JSON.stringify(state.evidence)}. Inspect acceptance coverage and missing checks.`);
+            await this.agent(run, 'VERIFY', cwd, state, task, `Independent check evidence: ${JSON.stringify(state.evidence.map(({log, ...entry}) => entry))}. Inspect acceptance coverage and missing checks.`);
             if (await git.head(cwd) !== state.head) throw new Blocked('VERIFY changed the commit');
             await git.clean(cwd); state.cursor = 'REVIEW';
+            confirmedProgress(this.store, run, `task:${state.id}:VERIFY`, state.head!);
             this.store.save(run, 'task.verified', {task: task.id}); break;
           }
           case 'REVIEW': {
@@ -247,6 +288,7 @@ export class Engine {
             await git.clean(cwd);
             state.reviewHead = await git.head(cwd);
             if (state.reviewHead !== state.head) throw new Blocked('REVIEW changed the commit');
+            confirmedProgress(this.store, run, `task:${state.id}:REVIEW`, state.reviewHead);
             state.cursor = 'SHIP'; this.store.save(run, 'task.reviewed', {task: task.id, head: state.reviewHead}); break;
           }
           case 'SHIP': {
@@ -272,9 +314,11 @@ export class Engine {
                 throw new Blocked('PR changed after validation');
               await this.syncTask(run, state, task, git, github);
               if (state.cursor !== 'INTEGRATE') break;
-              await github.merge(pr.number, head); pr = await github.viewPr(pr.number);
+              await this.merge(run, github, pr, head, await git.run(['rev-parse', `origin/${run.branch}`]));
+              pr = await github.viewPr(pr.number);
             }
             if (pr.state !== 'MERGED' || !pr.mergedAt) throw new Blocked('Intermediate merge is not confirmed');
+            if (pr.headRefOid !== state.reviewHead || !this.sufficient(run, state.evidence, pr.headRefOid)) throw new Blocked('Merged PR head differs from the reviewed and verified revision; dependency remains pending');
             await git.fetch(); await git.clean(run.worktree!);
             await git.run(['merge', '--ff-only', `origin/${run.branch}`], run.worktree!);
             state.pr = pr; state.integrated = true;
@@ -313,6 +357,17 @@ export class Engine {
     await this.sync(run, state.worktree!, `origin/${run.branch}`, git, state, task);
     state.head = await git.head(state.worktree!); state.cursor = 'VERIFY'; state.reviewHead = undefined; state.evidence = [];
     this.store.save(run, 'task.sync.invalidated', {task: state.id});
+  }
+  private async merge(run: Run, github: GitHub, pr: PullRequest, head: string, base: string) {
+    if (!run.plan.project.mergePolicy) throw new Blocked('No agreed GitHub merge policy; migrate by reviewing a new plan with project.mergePolicy');
+    const key = `${run.id}:merge:${pr.number}:${head}`;
+    const prior = this.store.operation<{state: string; base: string; operationId?: string}>(key);
+    if (prior?.state === 'enqueued') throw new ClientError('network', 'Merge queued; waiting for actual GitHub merge');
+    const intent = {state: 'executing', base, head, planHash: run.planHash, operationId: prior?.operationId};
+    this.store.recordOperation(key, run.id, 'merge.intent', intent);
+    const result = await github.merge(pr.number, head, {base, policy: run.plan.project.mergePolicy, operationId: prior?.operationId});
+    this.store.recordOperation(key, run.id, 'merge.' + result.state, {...intent, ...result});
+    if (result.state !== 'merged') throw new ClientError('network', 'Merge ' + result.state + '; waiting for actual GitHub merge');
   }
   async sync(run: Run, cwd: string, target: string, git: Git, state?: TaskState, task?: Task) {
     this.checkpoint(run);
@@ -362,14 +417,16 @@ export class Engine {
       } else if (run.finalPhase === 'VERIFY') {
         run.finalEvidence = await this.checks(run, git, cwd);
         const head = await git.head(cwd);
-        await this.agent(run, 'VERIFY', cwd, undefined, undefined, `Whole-feature acceptance and end-to-end validation. Check evidence: ${JSON.stringify(run.finalEvidence)}`);
+        await this.agent(run, 'VERIFY', cwd, undefined, undefined, `Whole-feature acceptance and end-to-end validation. Check evidence: ${JSON.stringify(run.finalEvidence.map(({log, ...entry}) => entry))}`);
         await git.clean(cwd); if (await git.head(cwd) !== head) throw new Blocked('Final VERIFY changed the commit');
+        confirmedProgress(this.store, run, 'feature:VERIFY', head);
         run.finalPhase = 'REVIEW'; this.store.save(run, 'feature.verified');
       } else if (run.finalPhase === 'REVIEW') {
         const head = await git.head(cwd);
         if (!this.sufficient(run, run.finalEvidence, head)) {run.finalPhase = 'VERIFY'; continue;}
         await this.agent(run, 'REVIEW', cwd, undefined, undefined, `Review the whole feature against ${run.plan.project.mainBranch}, including interactions, end-to-end acceptance, and regressions.`);
         await git.clean(cwd); if (await git.head(cwd) !== head) throw new Blocked('Final REVIEW changed the commit');
+        confirmedProgress(this.store, run, 'feature:REVIEW', head);
         run.finalReviewHead = head; run.finalPhase = 'SHIP'; this.store.save(run, 'feature.reviewed');
       } else {
         await git.fetch();
@@ -390,13 +447,12 @@ export class Engine {
       }
       } catch (error) {
         if (error instanceof Blocked || error instanceof ClientError || error instanceof ResourceBusy || !['VERIFY', 'REVIEW'].includes(run.finalPhase)) throw error;
-        const head = await git.head(cwd), fingerprint = hash(message(error));
-        const same = run.failures.fingerprint === fingerprint && run.failures.head === head;
-        run.failures = {fingerprint, head, count: same ? run.failures.count + 1 : 1};
+        const head = await git.head(cwd);
+        recordFailure(this.store, run, `feature:${run.finalPhase}`, error, head);
         run.reason = redact(message(error));
         this.store.save(run, 'feature.repair', {count: run.failures.count, reason: run.reason});
         if (run.failures.count >= 3) throw new Blocked('Three identical unsuccessful whole-feature repairs without progress: ' + run.reason);
-        await this.agent(run, 'BUILD', cwd, undefined, undefined, `Repair whole-feature acceptance or review failure: ${run.reason}. Preserve all integrated tasks.`);
+        await this.agent(run, 'BUILD', cwd, undefined, undefined, `Repair whole-feature acceptance or review failure: ${run.reason}. Cleaned failure bundle: ${JSON.stringify({...this.store.operation<object>(`${run.id}:failure-bundle`), previousUnsuccessfulAttempts: run.failures.count})}. Preserve all integrated tasks.`);
         await git.commit(cwd, 'Repair whole-feature validation');
         run.finalPhase = 'SYNC'; run.finalReviewHead = undefined; run.finalEvidence = [];
         this.store.save(run, 'feature.repaired');
@@ -442,7 +498,7 @@ export class Engine {
       if (pr.headRefOid !== expectedHead || run.finalReviewHead !== expectedHead || await git.head(run.worktree) !== expectedHead ||
         !this.sufficient(run, run.finalEvidence, expectedHead) ||
         run.syncedBase !== await git.run(['rev-parse', `origin/${run.plan.project.mainBranch}`])) throw new Error('Revision or base changed; sync and validate again');
-      if (pr.state !== 'MERGED') await github.merge(pr.number, expectedHead);
+      if (pr.state !== 'MERGED') await this.merge(run, github, pr, expectedHead, run.syncedBase!);
       const confirmed = await github.viewPr(pr.number);
       if (confirmed.state !== 'MERGED' || !confirmed.mergedAt) throw new Error('Final merge was not confirmed');
       run.finalPr = confirmed; run.status = 'merged';
@@ -453,9 +509,34 @@ export class Engine {
   async reconcileFinalMerge(id: string): Promise<Run> {
     const run = this.store.get(id);
     if (run.status !== 'ready' || !run.finalPr) return run;
+    let owner: string;
+    try {owner = this.store.acquire('run:' + id);} catch (error) {if (error instanceof ResourceBusy) return run; throw error;}
     const github = this.options.github || new Gh(run.plan.project.repository, run.root);
-    const pr = await github.viewPr(run.finalPr.number);
-    if (pr.state === 'MERGED') return this.confirmFinalMerge(id, pr.headRefOid);
+    let mergedHead: string | undefined;
+    try {
+      if (alive(run.childPid)) return run;
+      if (this.store.operation<{action?: string}>(`${id}:control`)?.action) return run;
+      const pr = await github.viewPr(run.finalPr.number);
+      if (pr.state === 'MERGED') mergedHead = pr.headRefOid;
+      else {
+        this.checkpoint(run);
+        const git = new Git(run.root, operation => this.store.withLock('repository:' + run.commonDir, operation));
+        await git.fetch();
+        const base = await git.run(['rev-parse', `origin/${run.plan.project.mainBranch}`]);
+        if (base !== run.syncedBase || pr.headRefOid !== run.finalReviewHead) {
+          run.status = 'approved'; run.finalPhase = 'SYNC'; run.finalReviewHead = undefined; run.finalEvidence = [];
+          run.reason = 'Readiness revoked: target or source changed; sync, checks, review and a new merge confirmation are required';
+          this.store.save(run, 'feature.readiness.revoked', {base, head: pr.headRefOid});
+          this.store.enqueue(`${id}:revoked:${base}:${pr.headRefOid}`, {project: run.plan.project.name, feature: run.plan.title, state: run.status, reason: run.reason, url: pr.url});
+        }
+      }
+    } finally {this.store.release('run:' + id, owner);}
+    if (mergedHead) return this.confirmFinalMerge(id, mergedHead);
+    const intent = this.store.operation<{state: string}>(`${id}:merge:${run.finalPr.number}:${run.finalReviewHead}`);
+    if (run.status === 'ready' && intent && intent.state !== 'enqueued') {
+      try {return await this.confirmFinalMerge(id, run.finalReviewHead!);}
+      catch (error) {if (!(error instanceof ClientError && error.kind === 'network')) throw error;}
+    }
     return run;
   }
 }

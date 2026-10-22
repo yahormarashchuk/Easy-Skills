@@ -4,6 +4,14 @@ repository: owner/repository
 mainBranch: main
 remote: origin
 githubTransport: gh
+mergePolicy:
+  mode: strict
+  requiredChecks:
+    - name: YOUR_REQUIRED_GITHUB_CHECK_NAME
+      # appId: YOUR_TRUSTED_GITHUB_APP_ID
+# The target branch must enforce strict up-to-date checks without admin bypass,
+# or use mode: queue with an effective GitHub merge queue. Configure protection
+# yourself; Easy Skills never changes branch settings to make a merge pass.
 checks:
   - id: test
     command: npm

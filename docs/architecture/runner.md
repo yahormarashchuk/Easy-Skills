@@ -34,8 +34,10 @@ that session. Authentication and model errors stop without provider fallback.
 
 Required check evidence contains command ID, commit, exit code, timestamp and private
 log path. A check or read/review stage that changes the checked tree invalidates readiness.
-Unavailable checks fail. Repeated code failures count only identical failures at the
-same commit. Quota/network waits use capped exponential backoff and do not count as
+Unavailable checks stop for prerequisites. Repeated normalized failures count across
+different commits in a scoped failure ledger. Observed revisions are recorded separately;
+independent stage success clears the corresponding unresolved failure scope.
+Quota/network waits use capped exponential backoff and do not count as
 repair attempts. Agent summaries never establish passing deterministic checks.
 
 External operations use stable run-specific markers. Recovery searches existing
@@ -50,3 +52,49 @@ The state home defaults to `%LOCALAPPDATA%/EasySkills` on Windows and
 outside the managed repository. It holds runner.db, logs/, worktrees/ and settings.json.
 Repository context remains under .easy-skills/. Credentials are never read from official
 CLI stores; mail passwords are read by environment-variable name.
+
+## Reliability additions (unreleased)
+
+Database schema v2 migrates notification leases/retry times, operation-bound decisions
+and probe executable identities in one transaction, with a pre-migration database
+backup. Existing run JSON and approved plan hashes remain unchanged. Plans without
+explicit rules agreement and merge policy receive a migration diagnostic; new
+permissions are never inferred from legacy approval.
+
+Structured onboarding records contain version, agreement status, resolved decisions,
+conflicts, assumptions, completion criteria and rules/configuration hashes. PLAN and
+execution check that agreement; Markdown wording is not an approval signal.
+
+Before first BUILD, the runner records original head, check commands and baseline
+results. Pre-existing failures and unavailable checks stop for a decision. Older
+already-started runs without a captured baseline stop explicitly rather than calling
+implemented code an original baseline. Feature evidence always requires passing
+checks at the actual reviewed head.
+
+Repair prompts receive bounded, cleaned failure bundles: command/check ID, exit code,
+test-name hints, stdout/stderr excerpts, prior attempt count and expected repair.
+Task scope chooses matching layer rules; global constraints stay mandatory. Unscoped
+legacy tasks conservatively retain all layer rules. Dependency summaries exclude
+private paths and sessions. Each invocation records a section/size/hash manifest;
+token estimates are approximations, not usage. Exact-session continuation can send
+only changed optional sections plus mandatory core/current observations.
+
+Clients use small structured-output schemas and runtime validation. Planning transports
+the complex Plan as JSON text for separate validation. Codex consumes its final-output
+file after turn completion; Claude consumes structured_output. Read-only VERIFY has
+separate approved diagnostic/browser capabilities, with no built-in edit tools.
+
+Remote commands persist received, validated, executing, succeeded, transient_failed
+and rejected states. Local effects and their completion marker commit together.
+Network effects reconcile outside SQL transactions. Accepted one-time merge codes
+are bound to stable operation/run/plan/head identity through retries and crashes.
+
+Notification workers atomically claim pending rows with expiry and retryAt. A failure
+does not block other rows. Stable Message-ID is not an exactly-once SMTP guarantee:
+a process dying after delivery but before acknowledgement can cause redelivery.
+
+Ready workers can restart without repeating implementation. Monitoring obtains the
+run lock, refuses to edit alongside a live child, and revokes readiness after base
+movement before automatic sync/reverification. GitHub async merge intents remain
+pending until actual merged state, never merely accepted/enqueued. See
+[merge gate](../merge-gate.md), [MCP](../mcp.md) and [validation](../validation.md).

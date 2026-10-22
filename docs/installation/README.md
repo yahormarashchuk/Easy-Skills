@@ -7,6 +7,9 @@ Authenticate in the official tools yourself (`codex login`, `claude auth login`,
 Install the compiled package from the
 [GitHub prerelease](https://github.com/yahormarashchuk/Easy-Skills/releases/tag/v0.1.0-alpha.1):
 
+That asset contains the original alpha. The reliability changes in this checkout
+are unreleased; build a current tarball below to test the updated commands.
+
 ```sh
 npm install -g https://github.com/yahormarashchuk/Easy-Skills/releases/download/v0.1.0-alpha.1/easy-skills-0.1.0-alpha.1.tgz
 easy-skills doctor
@@ -33,6 +36,11 @@ repeat with `--apply-hash HASH`. Defaults are ~/.agents/skills and ~/.claude/ski
 Only verified, unchanged installed files are removed by uninstall-skills; modified
 skills and backups are retained. Both commands preview before applying.
 
+The current checkout also provides `bootstrap --client codex` (or `claude-code`) for
+prerequisite/authentication diagnostics and the same reviewed skill installation.
+Bootstrap does not call a model. Use the hash from its own complete preview when
+applying it; the individual install-skills proposal has its own hash.
+
 The skill package is installed separately from npm's binary. To remove the binary use
 `npm uninstall -g easy-skills`; to remove skills run uninstall-skills with the exact
 installation target, review, and apply its hash. State and project context are retained.
@@ -40,5 +48,7 @@ installation target, review, and apply its hash. State and project context are r
 Upgrades must not replace a package while its workers are active. Keep the pinned
 tarball for recovery, compare package/skill changes, pause work at a safe point, back up
 the private state, install the reviewed version, and leave user modifications intact.
-Rollback uses the previous tarball and skill backups. Automated migrations, multi-version
-worker installation and an automatic rollback manager are not implemented in this alpha.
+Rollback uses the previous tarball and skill backups. Schema v1 to v2 migration is
+automatic with a pre-migration database backup. Existing plans keep their hashes;
+legacy agreement/merge-policy gaps require a new reviewed plan. Multi-version worker
+installation and an automatic rollback manager are not implemented in this alpha.

@@ -6,6 +6,7 @@ import { Git } from '../git/index.js';
 import { ensureDir, hash, rejectSymlinkPath } from '../util.js';
 import { packageRoot } from '../runner/context.js';
 import { skillResources } from '../skills.js';
+import { draftInterview } from '../runner/onboarding.js';
 
 export async function inspectProject(cwd: string) {
   const git = new Git(cwd), identity = await git.identity();
@@ -19,6 +20,7 @@ export async function initProject(cwd: string, config: unknown, applyHash?: stri
   const project = Project.parse(config), inspection = await inspectProject(cwd);
   const entries: Record<string, string> = {
     '.easy-skills/project.yaml': stringify(project),
+    '.easy-skills/decisions/onboarding.json': JSON.stringify(draftInterview(), null, 2) + '\n',
     '.easy-skills/context/project-map.md': `# ${project.name}\n\nDiscovered manifests:\n${inspection.manifests.map(p => '- ' + p).join('\n') || '(none)'}\n\nThis is an inventory, not an approved architecture. Read current code before each task.\n`,
     '.easy-skills/context/glossary.md': '# Glossary\n\nRecord agreed project terms here.\n',
     '.easy-skills/rules/architecture.md': '# Architecture\n\nPending interview: identify maintained examples, boundaries and deprecated patterns.\n',

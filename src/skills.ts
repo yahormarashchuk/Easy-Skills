@@ -1,6 +1,10 @@
 /** Maintained source paths; the packer and installer use the same dependency map. */
 export function skillResources(skill: string): Record<string, string> {
   const shared: Record<string, string> = {'references/workflow.md': 'skills/_shared/workflow.md'};
+  if (['easy-init', 'easy-feature'].includes(skill)) {
+    shared['references/interview.md'] = 'skills/_shared/interview.md';
+    shared['references/interview-evals.json'] = 'skills/_shared/interview-evals.json';
+  }
   if (skill === 'easy-init') shared['references/project.yaml'] = 'templates/project.yaml';
   if (skill === 'easy-plan') {
     shared['references/feature-request.yaml'] = 'templates/feature-request.yaml';
