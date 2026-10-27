@@ -28,7 +28,7 @@ export function rejectSymlinkPath(root: string, target: string): void {
     path = dirname(path);
   }
 }
-export function rulesHash(root: string): string {
+export function rulesHash(root: string, overlay: Record<string, string> = {}): string {
   const entries: Record<string, string> = {};
   function walk(dir: string) {
     try {
@@ -62,6 +62,7 @@ export function rulesHash(root: string): string {
     }
   }
   instructions('');
+  for (const [path, text] of Object.entries(overlay)) if (path.startsWith('.easy-skills/rules/')) entries[path] = text;
   return hash(Object.fromEntries(Object.entries(entries).map(([path, text]) => [path, text.replaceAll('\r\n', '\n')])));
 }
 export function alive(pid?: number): boolean {

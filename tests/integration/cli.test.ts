@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { writeFileSync, readFileSync, existsSync, rmSync, mkdirSync } from 'node:fs';
 import { requireAgreement } from '../../src/runner/onboarding.js';
 import { join, resolve } from 'node:path';
 import { stringify } from 'yaml';
@@ -76,4 +76,15 @@ for (const status of ['approved', 'running'] as const) test(`R9: CLI resume acce
       {cwd: process.cwd(), env: {EASY_SKILLS_HOME: f.store.home}, timeoutMs: 20000});
     assert.equal(result.code, 0, result.stderr); assert.equal(JSON.parse(result.stdout).attached, true);
   } finally {f.store.release(key, owner); await f.dispose();}
+});
+
+test('guided commands resolve the repository root from a nested working directory', async () => {
+  const f = await fixture();
+  try {
+    const nested = join(f.root, 'nested directory'); mkdirSync(nested);
+    const result = await execute({command: process.execPath, args: ['--import', 'tsx', resolve('src/cli/index.ts'), '--project', nested, 'init', '--non-interactive']},
+      {cwd: process.cwd(), env: {EASY_SKILLS_HOME: f.store.home}, timeoutMs: 20_000});
+    assert.equal(result.code, 0, result.stderr); assert.match(result.stdout, /Project rules already approved/);
+    assert.equal(existsSync(join(nested, '.easy-skills')), false);
+  } finally {await f.dispose();}
 });

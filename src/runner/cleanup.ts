@@ -56,7 +56,7 @@ export async function cleanup(store: Store, id: string, expectedHash: string, gi
       }
       store.event(id, 'cleanup.worktree.removed', resource);
     }
-    await gh.setIssue(run.parentIssue!, false, `Feature merged: ${confirmed.url}`);
+    if (run.parentIssue && (!run.plan.workflow || run.plan.workflow.permissions.closeIssueOnMerge)) await gh.setIssue(run.parentIssue, false, `Feature merged: ${confirmed.url}`);
     run.finalPr = confirmed; run.status = 'merged'; store.save(run, 'cleanup.completed');
     return plan.resources;
   } finally {store.release(key, owner);}

@@ -206,6 +206,61 @@
       ],
       "additionalProperties": false
     },
+    "workflow": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "const": "direct"
+        },
+        "issue": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "baseHead": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40,64}$"
+        },
+        "permissions": {
+          "type": "object",
+          "properties": {
+            "pushBranch": {
+              "type": "boolean"
+            },
+            "createPullRequest": {
+              "type": "boolean"
+            },
+            "closeIssueOnMerge": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "pushBranch",
+            "createPullRequest",
+            "closeIssueOnMerge"
+          ],
+          "additionalProperties": false
+        },
+        "context": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^\\.easy-skills\\/(?:rules\\/[^:]+|context\\/[^:]+|project\\.yaml|decisions\\/onboarding\\.json)$"
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "mode",
+        "baseHead",
+        "permissions",
+        "context"
+      ],
+      "additionalProperties": false
+    },
     "repairPolicy": {
       "default": {
         "maxCompletedAttempts": 3

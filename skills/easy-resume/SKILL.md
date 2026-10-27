@@ -3,6 +3,12 @@ name: easy-resume
 description: Diagnose and recover an Easy Skills run after interruption, quota wait or a user decision.
 ---
 
+The terminal commands `easy-skills status` and `easy-skills resume` select the latest
+active task. An Issue number can select a direct task. Use `status --json` only when
+full persisted diagnostics are needed. Ready direct tasks accept reviewed feedback
+through `easy-skills revise ISSUE_NUMBER "feedback"`; this creates a new approval
+revision while preserving the original Issue, branch and PR.
+
 Read [the workflow contract](references/workflow.md). Inspect `easy-skills status <run>`
 and `events <run>`, actual process liveness, Git state and existing GitHub objects.
 Keep the pinned plan/rules/package and assigned model unchanged. Resume the exact

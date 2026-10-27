@@ -3,6 +3,15 @@ name: easy-feature
 description: Define a feature, resolve requirements and choose exact CLI/model assignments before implementation.
 ---
 
+The normal terminal path is `easy-skills run ISSUE_NUMBER`, an Issue URL, a project-local
+specification, or a quoted task. It performs missing onboarding, a source-informed
+interview, saved model selection, technical planning and one execution confirmation.
+Default direct mode reuses the Issue and produces one task branch and one reviewed PR.
+No intermediate merge or branch-protection access is required for manual PR delivery.
+Use `easy-skills revise ISSUE_NUMBER "feedback"` to review a replacement approval and
+update that same branch/PR. Keep exact assignments and the Claude isolation restriction.
+
+The following procedure remains available for advanced multi-task features.
 Read [the workflow contract](references/workflow.md). Read project context and current
 code in the affected area. Accept prose, an Issue or a document; inspect provided
 screenshots as additional requirements. Flag a stale project map.

@@ -17,14 +17,20 @@ take precedence. No new live-provider or GitHub mutation acceptance is claimed.
 | Distribution | Compiled npm tarball, bootstrap diagnostics, preview/apply installation, backups and conservative uninstall | Registry publication and clean-machine installer acceptance |
 | State/runner | SQLite WAL, event log, optimistic updates, process/run/resource locks, detached worker, live-child recovery guard | Full power-loss/orphan-process reconciliation across Windows reboots; automatic startup is intentionally absent |
 | Onboarding/rules | Read-only inventory, structured versioned rules agreement, unresolved decision procedure, six behavioral eval cases, 13 packaged skills | Interview quality remains model-dependent; eval cases are provided but not run against a live model |
-| Feature/model routing | Interactive DEFINE; read-only feature plan command routes the selected PLAN CLI/model; exact assignments in approved plans; autonomous BUILD onward | No standalone terminal interview wizard; local skill interaction is the interface |
-| GitHub/worktrees | gh transport, agreed GitHub checks/protection, async merge intents, reviewed-head reconciliation, sequential dependencies and owned worktrees | Real GitHub mutation/branch-protection acceptance; GitHub MCP transport not implemented |
+| Feature/model routing | Terminal interviews, saved exact six-stage profiles, readable rule/task confirmations, hash-bound plans, autonomous BUILD onward; advanced feature commands retained | Live interview quality and large-project latency acceptance; advanced mode is selected explicitly |
+| GitHub/worktrees | Direct existing-Issue or local task mode with one branch/PR; manual delivery without merge-policy access; advanced dependencies and merge gates retained | Real GitHub mutation/branch-protection acceptance; GitHub MCP transport not implemented |
 | Evidence/review | Baseline capture, cleaned failure bundles, scoped/delta context manifests, exact-head evidence and repairs bounded across commits | Real acceptance with production repositories and independent human reviewers |
 | Sync | Recovery refs, merge, conflict session using BUILD, revalidation, manual sync, preserved ambiguous merge | Broader semantic-conflict corpus and crash fault injection |
 | Notifications/remote | Outbox claims/leases/backoff, durable remote operation states, operation-bound merge intent, replay and crash reconciliation | Real SMTP/mobile decision acceptance |
 | Environments/MCP | Shared resource locks, Compose inspection, native Codex TOML/Claude JSON MCP setup, protocol/tool checks and VERIFY tool filtering | Managed database/schema/port provisioning and data lifecycle cleanup; managed/plugin client configurations need live validation |
 | Cleanup | Actual merged PR/head/base checks, live executor/ownership/dirty guards, exact proposal hash; no force | Branches retained; database/volume deletion deliberately unimplemented |
 | Updates/release | Version pins, backups, documented manual rollback; CI definitions for Windows/Linux; GitHub prerelease packaging | Automated updater/rollback manager; complete v1 acceptance still pending |
+
+The guided redesign adds bounded discovery, rule evidence/provenance, persisted interview
+answers, recoverable knowledge saves, project-context snapshots, explicit scripted
+consent, same-PR feedback approval history and latest-task status/resume. See
+[guided workflow and remaining limits](guided-workflow.md). No new live acceptance is
+implied by these additions. Claude continues to fail closed.
 
 Local tests use temporary Git repositories, real Git merges and deterministic CLI
 fixtures. Node and Python sample checks exercise different project layouts without

@@ -19,6 +19,14 @@ From the source checkout, `node --import tsx scripts/package-acceptance.ts
 CLEAN_DIR/node_modules/easy-skills` performs that injected compiled-package scenario,
 including reattaching to a ready feature without leaving a deferred execution request.
 
+The package scenario also exercises a direct existing-Issue task, same-PR feedback,
+saved profiles, readable Issue status, and interactive packaged skill installation
+using explicit fixture consent. `tests/integration/guided.test.ts` covers fresh rules,
+answer reuse, conflicting examples, interrupted rule writes, exact probe resumption,
+direct manual delivery, scope guards, lost PR acknowledgements and natural-language
+tasks. Scripted approval tests reject booleans and stale proposal digests. None of
+these fixtures authorize or perform real model requests or GitHub mutations.
+
 Recovery coverage includes changing-commit repair loops, quota waits beyond 24 hours,
 exact-session resume, authentication/client identity changes, remote operation replay,
 single-use intent binding, concurrent outbox claims, lost delivery acknowledgements,

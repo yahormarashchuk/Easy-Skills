@@ -8,7 +8,7 @@ import { CliClient, ClientError, classify, type Client } from '../adapters/index
 import { Git } from '../git/index.js';
 import { Gh, MergeTerminalError, type GitHub } from '../github/index.js';
 import { execute } from '../process.js';
-import { alive, ensureDir, hash, message, now, redact, rulesHash } from '../util.js';
+import { alive, ensureDir, hash, message, now, redact, rulesHash, rejectSymlinkPath } from '../util.js';
 import { assembleContext, type ContextManifest } from './context.js';
 import { recordFailure, confirmedProgress } from './failures.js';
 import { requireCompatibility } from './compatibility.js';
@@ -32,9 +32,25 @@ export class Engine {
     const intent = this.store.operation<{path: string; branch: string}>(`${run.id}:worktree:${state?.id || 'integration'}`);
     if (!intent || realpathSync.native(intent.path) !== realpathSync.native(cwd) || intent.branch !== branch) throw new Blocked('Worktree owner or path differs from persisted intent');
     await git.assertOwned(cwd, branch, join(this.store.home, 'worktrees', run.id));
-    if (rulesHash(cwd) !== run.plan.rulesHash) throw new Blocked('Worktree instructions or client configuration changed; preserve changes and review a replacement plan');
+    const overlay = run.plan.workflow?.context || {};
+    if (run.plan.workflow) {
+      // Virtual knowledge may override old tracked context, never edits made by a stage.
+      if (await git.run(['diff', '--name-only', run.plan.workflow.baseHead, '--', '.easy-skills'], cwd) ||
+        await git.run(['ls-files', '--others', '--exclude-standard', '--', '.easy-skills'], cwd))
+        throw new Blocked('Task changed managed project knowledge; preserve changes and review a replacement plan');
+      const merging = existsSync(await git.run(['rev-parse', '--path-format=absolute', '--git-path', 'MERGE_HEAD'], cwd));
+      if (!merging) {
+        const base = await git.run(['merge-base', `origin/${run.plan.project.mainBranch}`, 'HEAD'], cwd);
+        const changed = (await git.run(['diff', '--name-only', '-z', base, '--'], cwd)).split('\0').filter(Boolean);
+        changed.push(...(await git.run(['ls-files', '--others', '--exclude-standard', '-z'], cwd)).split('\0').filter(Boolean));
+        const paths = run.plan.tasks[0]!.scope!.paths.map(p => p.replace(/\/$/, ''));
+        const outside = changed.filter(p => !paths.some(allowed => allowed === '.' || p === allowed || p.startsWith(allowed + '/')));
+        if (outside.length) throw new Blocked('Changes exceed the approved task paths: ' + outside.join(', '));
+      }
+    }
+    if (rulesHash(cwd, overlay) !== run.plan.rulesHash) throw new Blocked('Worktree instructions or client configuration changed; preserve changes and review a replacement plan');
     if (!run.plan.protectedInputs) throw new Blocked('Legacy plan lacks approved protected verification inputs');
-    try {assertProtected(cwd, run.plan.project, run.plan.protectedInputs);} catch (error) {throw new Blocked(message(error));}
+    try {assertProtected(cwd, run.plan.project, run.plan.protectedInputs, overlay);} catch (error) {throw new Blocked(message(error));}
   }
   approve(id: string, expectedHash: string): Run {
     const run = this.store.get(id);
@@ -48,8 +64,47 @@ export class Engine {
     if (rulesHash(run.root) !== run.plan.rulesHash) throw new Error('Project rules changed; prepare a new plan');
     if (!run.plan.rulesAgreement) throw new Error('Plan lacks an explicit rules agreement; complete onboarding and review a replacement plan');
     requireAgreement(run.root, run.plan.rulesAgreement);
+    if (run.plan.workflow) for (const [path, content] of Object.entries(run.plan.workflow.context)) {
+      rejectSymlinkPath(run.root, join(run.root, path));
+      if (readFileSync(join(run.root, path), 'utf8') !== content) throw new Error('Project knowledge changed since the task proposal');
+    }
     run.approvedHash = expectedHash; run.status = 'approved';
     this.store.save(run, 'plan.approved', {hash: expectedHash}); return run;
+  }
+  /** Replace a ready direct task only after review of a new immutable plan and exact head. */
+  async revise(id: string, input: unknown, expectedHash: string, previousHash: string, head: string): Promise<Run> {
+    const owner = this.store.acquire('run:' + id), run = this.store.get(id);
+    try {
+      const plan = Plan.parse(input);
+      if (run.status !== 'ready' || !run.plan.workflow || !plan.workflow || ownerAlive(run.childPid, run.childIdentity))
+        throw new Error('Feedback requires a ready direct task with no live client');
+      if (run.planHash !== previousHash || hash(plan) !== expectedHash || run.finalReviewHead !== head)
+        throw new Error('Feedback proposal is stale; review the current plan and revision');
+      for (const field of ['featureId', 'project', 'workflow', 'permissions'] as const)
+        if (hash(plan[field]) !== hash(run.plan[field])) throw new Error('Feedback cannot change task identity or external permissions: ' + field);
+      const intent = this.store.operation<{state: string}>(`${id}:merge:${run.finalPr!.number}:${head}`);
+      if (intent && !['failed', 'expired', 'cancelled'].includes(intent.state)) throw new Error('Reconcile the outstanding merge before revising');
+      const git = this.git(run), github = this.options.github || new Gh(run.plan.project.repository, run.root);
+      await this.guard(run, run.worktree!); await git.clean(run.worktree!);
+      const pr = await github.viewPr(run.finalPr!.number);
+      if (pr.state !== 'OPEN' || pr.headRefOid !== head || await git.head(run.worktree!) !== head || pr.headRefName !== run.branch || pr.baseRefName !== run.plan.project.mainBranch)
+        throw new Error('PR or local revision changed; reconcile before revising');
+      const previous = structuredClone({plan: run.plan, planHash: run.planHash, approvedHash: run.approvedHash, head,
+        evidence: run.finalEvidence, reviewHead: run.finalReviewHead, sessions: run.finalSessions});
+      // Validate using the same approval path; rollback leaves the original ready record intact.
+      this.store.transaction(() => {
+        this.store.recordOperation(`${id}:approval:${run.planHash}`, id, 'approval.history', previous);
+        for (const stage of Object.keys(run.finalSessions) as Stage[])
+          if (hash(plan.assignments[stage]) !== hash(run.plan.assignments[stage])) delete run.finalSessions[stage];
+        run.plan = plan; run.planHash = expectedHash; run.approvedHash = undefined; run.status = 'draft';
+        run.finalReviewHead = undefined; run.finalEvidence = []; run.finalPhase = 'SYNC';
+        run.tasks = plan.tasks.map(t => ({id: t.id, cursor: 'BUILD', integrated: false, evidence: [], sessions: {}}));
+        run.pendingDecision = undefined;
+        this.store.save(run, 'feedback.proposed');
+        this.approve(id, expectedHash);
+      });
+      return this.store.get(id);
+    } finally {this.store.release('run:' + id, owner);}
   }
   requestControl(id: string, action: 'pause' | 'stop') {
     this.store.get(id);
@@ -104,7 +159,8 @@ export class Engine {
         this.store.recordOperation(`${id}:manual-sync`, id, 'manual.sync', {pending: false});
         this.store.save(run, 'manual.sync.recovered');
       }
-      while (run.tasks.some(t => !t.integrated)) {
+      if (run.plan.workflow) await this.directBuild(run, git);
+      while (!run.plan.workflow && run.tasks.some(t => !t.integrated)) {
         this.checkpoint(run);
         const task = run.plan.tasks.find(t => !run.tasks.find(s => s.id === t.id)!.integrated &&
           t.dependsOn.every(dep => run.tasks.find(s => s.id === dep)!.integrated));
@@ -145,7 +201,7 @@ export class Engine {
   private async prepare(run: Run, git: Git, github: GitHub) {
     await git.fetch();
     if (!run.worktree) {
-      run.worktree = await this.ownedWorktree(run, git, run.branch, `origin/${run.plan.project.mainBranch}`, 'integration');
+      run.worktree = await this.ownedWorktree(run, git, run.branch, run.plan.workflow?.baseHead || `origin/${run.plan.project.mainBranch}`, 'integration');
       this.store.save(run, 'integration.created');
     }
     await this.guard(run, run.worktree);
@@ -163,6 +219,7 @@ export class Engine {
     }
     const baseline = this.store.operation<{status: string}>(`${run.id}:baseline`)!;
     if (baseline.status !== 'passed') throw new Blocked(`Baseline ${baseline.status}; resolve or explicitly replan the existing problem before feature implementation`);
+    if (run.plan.workflow) return;
     if (!run.plan.permissions.publishIssues) throw new Blocked('Publishing Issues and PRs is not authorized by this plan');
     if (!run.parentIssue) {
       run.parentIssue = await github.issue(`${run.id}:feature`, run.plan.title, run.plan.spec);
@@ -183,6 +240,15 @@ export class Engine {
         this.store.save(run, 'github.task.created', {task: task.id, issue: state.issue});
       }
     }
+  }
+  private async directBuild(run: Run, git: Git) {
+    const task = run.tasks[0]!;
+    if (task.integrated) return;
+    await this.build(run, git, run.worktree!, undefined, undefined, `direct-${run.planHash}`,
+      'Implement the single approved task and regression tests. Keep Git commits under runner control.');
+    task.head = await git.head(run.worktree!); task.integrated = true;
+    run.finalPhase = 'SYNC'; run.finalReviewHead = undefined; run.finalEvidence = [];
+    this.store.save(run, 'direct.built', {head: task.head});
   }
   private async setup(run: Run, git: Git, cwd: string) {
     const key = `${run.id}:setup:${hash(cwd)}`, fingerprint = hash({commands: run.plan.project.setup || [], inputs: run.plan.protectedInputs});
@@ -300,7 +366,7 @@ export class Engine {
         run.pendingDecision = {id: randomUUID(), planHash: run.planHash, head: await new Git(cwd).head(cwd), stage, taskId: task?.id,
           question: result.question || result.summary};
         this.store.save(run, 'decision.requested', {request: run.pendingDecision.id, stage, task: task?.id});
-        if (run.parentIssue) {
+        if (run.parentIssue && !run.plan.workflow) {
           const github = this.options.github || new Gh(run.plan.project.repository, run.root);
           await github.commentOnce(run.parentIssue, 'decision:' + run.pendingDecision.id,
             redact(`Easy Skills requires a decision: ${run.pendingDecision.question}\n\nRequest: ${run.pendingDecision.id}\nPlan: ${run.planHash}\nRevision: ${run.pendingDecision.head}\n\nReply with the entire comment:\n/easy-skills answer ${run.id} ${run.planHash} ${run.pendingDecision.id} "YOUR ANSWER"`));
@@ -591,10 +657,13 @@ export class Engine {
         if (head !== run.finalReviewHead || !this.sufficient(run, run.finalEvidence, head)) {run.finalPhase = 'VERIFY'; continue;}
         await this.agent(run, 'SHIP', cwd, undefined, undefined, 'Verify final PR readiness. Do not merge the main branch.');
         await git.clean(cwd); if (await git.head(cwd) !== head) throw new Blocked('Final SHIP changed the commit');
+        if (run.plan.workflow && (!run.plan.workflow.permissions.pushBranch || !run.plan.workflow.permissions.createPullRequest))
+          throw new Blocked('The approved task does not authorize branch push and PR creation');
         await git.push(run.branch, cwd);
         run.finalPr = await github.pr(`${run.id}:final`, run.plan.title,
-          `${run.plan.spec}\n\nParent #${run.parentIssue}; stays open until final merge.\n\nVerified revision: ${head}\n\n${run.finalEvidence.map(e => '- ' + e.checkId + ': passed').join('\n')}\n\nFinal review: ${run.finalReviewHead}\nPlan: ${run.planHash}`, run.branch, run.plan.project.mainBranch);
-        if (run.finalPr.headRefOid !== head) throw new Blocked('Final PR head changed');
+          `${run.plan.spec}\n\n${run.parentIssue ? `Implements #${run.parentIssue}; stays open until final merge.` : 'Local task; no Issue created.'}\n\nVerified revision: ${head}\n\n${run.finalEvidence.map(e => '- ' + e.checkId + ': passed').join('\n')}\n\nFinal review: ${run.finalReviewHead}\nFinal merge: manual.`, run.branch, run.plan.project.mainBranch);
+        if (run.finalPr.headRefOid !== head || run.finalPr.baseRefName !== run.plan.project.mainBranch || run.finalPr.headRefName !== run.branch || run.finalPr.state !== 'OPEN')
+          throw new Blocked('Final PR identity or head changed');
         run.status = 'ready'; this.store.save(run, 'feature.ready', {pr: run.finalPr});
         this.store.enqueue(`${run.id}:ready:${head}`, {runId: run.id, project: run.plan.project.name, feature: run.plan.title,
           state: 'ready', reason: 'Ready for final verification and a separate merge decision', url: run.finalPr.url});
@@ -738,7 +807,7 @@ export class Engine {
         if (run.approvedHash !== run.planHash || hash(run.plan) !== run.planHash || !this.sufficient(run, run.finalEvidence, expectedHead))
           throw new Error('Historical merge does not match persisted approval and verification evidence');
         run.finalPr = pr; run.status = 'merged';
-        await github.setIssue(run.parentIssue!, false, `Feature merged: ${pr.url}`);
+        if (run.parentIssue && (!run.plan.workflow || run.plan.workflow.permissions.closeIssueOnMerge)) await github.setIssue(run.parentIssue, false, `Feature merged: ${pr.url}`);
         this.store.save(run, 'feature.merge.reconciled'); return run;
       }
       if (run.status !== 'ready') throw new Error('Feature is not ready');
@@ -751,7 +820,7 @@ export class Engine {
       const confirmed = await github.viewPr(pr.number);
       if (confirmed.state !== 'MERGED' || !confirmed.mergedAt || confirmed.headRefOid !== expectedHead || confirmed.baseRefName !== run.plan.project.mainBranch || confirmed.headRefName !== run.branch) throw new Error('Final merge was not confirmed at the authorized head and target');
       run.finalPr = confirmed; run.status = 'merged';
-      await github.setIssue(run.parentIssue!, false, `Feature merged: ${confirmed.url}`);
+      if (run.parentIssue && (!run.plan.workflow || run.plan.workflow.permissions.closeIssueOnMerge)) await github.setIssue(run.parentIssue, false, `Feature merged: ${confirmed.url}`);
       this.store.save(run, 'feature.merged'); return run;
     } finally {this.store.release('run:' + id, owner);}
   }

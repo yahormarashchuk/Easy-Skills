@@ -32,7 +32,13 @@ easy-skills doctor
 The npm registry release is not published. The tarball includes compiled runner code,
 schemas, skills, templates and docs; users of the package do not compile TypeScript.
 
-Install client-discoverable skills with `easy-skills install-skills --client codex` or
+For the guided installation, run `easy-skills install-skills --client codex --interactive`.
+Review the packaged file list and confirm; backups preserve previous files. Then run
+`easy-skills init` and `easy-skills run ISSUE_NUMBER` in your project. On PowerShell
+hosts blocking npm's `.ps1` wrapper, use `easy-skills.cmd` with identical arguments.
+Do not change execution policy or global Git ownership settings automatically.
+
+Advanced users can install client-discoverable skills with `easy-skills install-skills --client codex` or
 `--client claude-code`. This prints complete before/after content and an approval hash;
 repeat with `--apply-hash HASH`. Defaults are ~/.agents/skills and ~/.claude/skills;
 `--target` supports another documented client location. Existing skill files get backups.

@@ -25,6 +25,8 @@ import { agreementProposal, applyAgreement } from '../runner/onboarding.js';
 import { mcpProposal, applyMcp } from '../integrations/mcp.js';
 import { bootstrap } from './bootstrap.js';
 import { childEnvironment } from '../execution.js';
+import { Guided, resolveRun } from '../runner/guided.js';
+import { TerminalInteraction } from './interaction.js';
 
 const program = new Command().name('easy-skills').version(VERSION).description('Local engineering workflow runner (alpha)');
 program.option('--project <path>', 'Project directory', process.cwd());
@@ -35,6 +37,18 @@ async function withStore<T>(fn: (store: Store) => Promise<T> | T) {
   try {return await fn(store);} finally {store.close();}
 }
 function cwd() {return realpathSync.native(program.opts().project);}
+async function guided<T>(opts: {answers?: string; nonInteractive?: boolean}, fn: (wizard: Guided, store: Store, ui: TerminalInteraction) => Promise<T>) {
+  const identity = await new Git(cwd()).identity();
+  program.setOptionValue('project', identity.root);
+  const ui = new TerminalInteraction(opts);
+  try {return await withStore(store => fn(new Guided(store, ui), store, ui));} finally {ui.close();}
+}
+function summary(run: import('../contracts.js').Run) {
+  const stage = run.tasks.find(t => !t.integrated)?.cursor || run.finalPhase;
+  return `${run.plan.workflow?.issue ? 'Task #' + run.plan.workflow.issue : run.plan.title}: ${run.status}\n` +
+    (run.status === 'ready' ? `Ready for review: ${run.finalPr?.url}\nChecks: passed at ${run.finalReviewHead}\nReview: passed. Final merge: manual.` : `Stage: ${stage}`) +
+    (run.reason ? '\n' + run.reason : '') + (run.pendingDecision ? '\nDecision: ' + run.pendingDecision.question : '');
+}
 function start(store: Store, id: string) {
   const run = store.get(id);
   if (store.locked('worker:' + id)) return {runId: id, attached: true, status: run.status};
@@ -56,8 +70,58 @@ program.command('bootstrap').requiredOption('--client <provider>', 'codex or cla
     const target = opts.target || join(homedir(), provider === 'codex' ? '.agents' : '.claude', 'skills');
     output(await bootstrap(cwd(), provider, target, opts.applyHash));
   });
-program.command('init').requiredOption('--config <file>', 'Proposed project YAML').option('--apply-hash <hash>', 'Apply the reviewed onboarding proposal')
-  .action(async opts => output(await initProject(cwd(), read(opts.config), opts.applyHash)));
+program.command('init').description('Discover this project, discuss conventions, and save approved rules')
+  .option('--config <file>', 'Advanced: proposed project YAML').option('--apply-hash <hash>', 'Advanced: apply reviewed onboarding proposal')
+  .option('--answers <json>', 'Explicit scripted answers and approvals').option('--non-interactive', 'Never prompt for missing input')
+  .action(async opts => {
+    if (opts.config) {output(await initProject(cwd(), read(opts.config), opts.applyHash)); return;}
+    if (opts.applyHash) throw new Error('--apply-hash requires advanced --config');
+    await guided(opts, async wizard => {
+      try {const binding = (await import('../runner/onboarding.js')).requireAgreement(cwd()); process.stdout.write('Project rules already approved (revision ' + binding.version + '). Use easy-skills rules to update them.\n'); return;} catch {}
+      const profile = await wizard.profile(cwd()); await wizard.compatibility(cwd(), profile); await wizard.onboard(cwd(), profile);
+    });
+  });
+program.command('config').description('Choose or save exact stage model assignments')
+  .option('--profile-file <json>', 'Named profile with all six exact assignments')
+  .option('--answers <json>').option('--non-interactive')
+  .action(async opts => {await guided(opts, wizard => wizard.profile(cwd(), true, opts.profileFile ? read(opts.profileFile) : undefined));});
+program.command('rules [change]').description('Review or conversationally update approved project rules')
+  .option('--answers <json>').option('--non-interactive')
+  .action(async (change, opts) => guided(opts, async (wizard, _store, ui) => {
+    if (!change) {
+      const snapshot = (await import('../runner/discovery.js')).knowledgeSnapshot(cwd());
+      for (const [path, text] of Object.entries(snapshot)) if (path.startsWith('.easy-skills/rules/')) ui.say(text);
+      change = await ui.ask('rules:change', 'Describe the rule change, or enter cancel');
+      if (change.toLowerCase() === 'cancel') return;
+    }
+    const profile = await wizard.profile(cwd()); await wizard.compatibility(cwd(), profile); await wizard.onboard(cwd(), profile, change);
+  }));
+program.command('run <task>').description('Discuss an Issue, local specification or task, then develop through a reviewed PR')
+  .option('--refine <text>', 'Discuss corrections to an unapproved proposal for this same task')
+  .option('--answers <json>').option('--non-interactive').option('--foreground', 'Run one pass in this terminal')
+  .action(async (task, opts) => guided(opts, async (wizard, store, ui) => {
+    const issueUrl = task.match(/^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/issues\/(\d+)\/?(?:#.*)?$/i);
+    const number = /^\d+$/.test(task) ? Number(task) : issueUrl ? Number(issueUrl[2]) : undefined;
+    if (number !== undefined) {
+      const existing = store.list().find(r => r.root === cwd() && r.plan.workflow?.issue === number && (!issueUrl || r.plan.project.repository.toLowerCase() === issueUrl[1]!.toLowerCase()) && !['merged', 'abandoned'].includes(r.status));
+      if (existing) {ui.say(summary(existing) + '\nUse easy-skills resume or easy-skills revise ' + number + ' "feedback".'); return;}
+    }
+    const profile = await wizard.profile(cwd()); await wizard.compatibility(cwd(), profile);
+    await wizard.onboard(cwd(), profile);
+    const plan = await wizard.proposal(cwd(), task, profile, undefined, opts.refine), run = await wizard.approve(cwd(), plan);
+    if (opts.foreground) ui.say(summary(await new Engine(store).run(run.id)));
+    else {start(store, run.id); ui.say('Autonomous development started. Use easy-skills status to follow progress and easy-skills resume after an interruption.');}
+  }));
+program.command('revise <task> <feedback>').description('Review a revised plan and update the same task branch and PR')
+  .option('--answers <json>').option('--non-interactive').option('--foreground')
+  .action(async (task, feedback, opts) => guided(opts, async (wizard, store, ui) => {
+    const previous = resolveRun(store, cwd(), task);
+    if (previous.status !== 'ready' || !previous.plan.workflow) throw new Error('Feedback requires a ready direct task; use resume for interrupted work');
+    const profile = await wizard.profile(cwd()); await wizard.compatibility(cwd(), profile);
+    const plan = await wizard.proposal(cwd(), feedback, profile, previous), run = await wizard.approve(cwd(), plan, previous);
+    if (opts.foreground) ui.say(summary(await new Engine(store).run(run.id)));
+    else {start(store, run.id); ui.say('Applying approved feedback on the existing branch and PR. Use easy-skills status for progress.');}
+  }));
 program.command('project-config').requiredOption('--file <yaml>', 'Reviewed replacement project v2 configuration').option('--apply-hash <hash>', 'Apply the reviewed configuration with a backup')
   .action(async opts => output(await updateProject(cwd(), read(opts.file), opts.applyHash)));
 program.command('rules-hash').action(() => output({rulesHash: rulesHash(cwd())}));
@@ -120,16 +184,22 @@ feature.command('approve <id>').requiredOption('--hash <sha256>', 'Exact reviewe
   .action(async (id, opts) => withStore(store => output(new Engine(store).approve(id, opts.hash))));
 program.command('start <id>').option('--foreground', 'Run one execution pass attached to this terminal')
   .action(async (id, opts) => withStore(async store => output(opts.foreground ? await new Engine(store).run(id) : start(store, id))));
-program.command('resume <id>').description('Resume the approved plan and exact recorded sessions')
-  .action(async id => withStore(store => {
-    const run = store.get(id);
+program.command('resume [id]').description('Resume the latest task, Issue number, or run ID with exact recorded sessions')
+  .action(async reference => withStore(async store => {
+    const run = reference && /^[a-f0-9-]{36}$/.test(reference) ? store.get(reference) : resolveRun(store, (await new Git(cwd()).identity()).root, reference), id = run.id;
     if (!['approved', 'running', 'paused', 'needs_decision', 'waiting_quota', 'waiting_external', 'waiting_resource', 'ready'].includes(run.status)) throw new Error('Run is not resumable');
     if (run.status !== 'ready') store.recordOperation(`${id}:resume-request`, id, 'local.resume', {resume: true});
     output(start(store, id));
   }));
 program.command('pause <id>').action(async id => withStore(store => {new Engine(store).requestControl(id, 'pause'); output({runId: id, requested: 'pause', at: 'next safe checkpoint'});}));
 program.command('stop <id>').action(async id => withStore(store => {new Engine(store).requestControl(id, 'stop'); output({runId: id, requested: 'stop', at: 'next safe checkpoint'});}));
-program.command('status [id]').action(async id => withStore(store => output(id ? {...store.get(id), notifications: store.notificationSummary(id)} : store.list().map(r => ({id: r.id, feature: r.plan.title, status: r.status, stopReason: r.stopReason, reason: r.reason, pr: r.finalPr?.url, notifications: store.notificationSummary(r.id)})))));
+program.command('status [id]').option('--json', 'Advanced: full persisted diagnostics').action(async (id, opts) => withStore(async store => {
+  // Explicit UUID retains the original machine-readable advanced interface.
+  if (id && /^[a-f0-9-]{36}$/.test(id)) {output({...store.get(id), notifications: store.notificationSummary(id)}); return;}
+  const root = (await new Git(cwd()).identity()).root;
+  if (opts.json) output(id ? resolveRun(store, root, id) : store.list().filter(r => r.root === root));
+  else process.stdout.write(summary(resolveRun(store, root, id)) + '\n');
+}));
 program.command('events <id>').action(async id => withStore(store => output(store.events(id))));
 program.command('abandon <id>').description('Retain history and resources; allow a separately approved replacement').action(async id => withStore(store => new Engine(store).abandon(id).then(output)));
 program.command('baseline <id>').requiredOption('--recapture <commit>', 'Exact selected base before implementation').option('--apply-hash <hash>', 'Apply the reviewed recapture').action(async (id, opts) => withStore(async store => output(await new Engine(store).recaptureBaseline(id, opts.recapture, opts.applyHash))));
@@ -150,10 +220,23 @@ program.command('cleanup <id>').option('--apply-hash <hash>', 'Remove only resou
   .action(async (id, opts) => withStore(async store => output(opts.applyHash ? await cleanup(store, id, opts.applyHash, undefined, !!opts.setupOutputs) : await cleanupPlan(store, id, undefined, !!opts.setupOutputs))));
 program.command('install-skills').requiredOption('--client <name>', 'codex or claude-code')
   .option('--target <directory>', 'Override client skill directory').option('--apply-hash <hash>', 'Apply the reviewed skill installation')
-  .action(opts => {
+  .option('--interactive', 'Review and confirm installation without copying a hash').option('--answers <json>').option('--non-interactive')
+  .action(async opts => {
     const provider = Assignment.parse({provider: opts.client, model: 'installation'}).provider;
     const target = opts.target || join(homedir(), provider === 'codex' ? '.agents' : '.claude', 'skills');
-    output(installSkills(target, opts.applyHash));
+    if (opts.interactive) {
+      if (opts.applyHash) throw new Error('Choose interactive installation or an advanced apply hash');
+      const ui = new TerminalInteraction(opts);
+      try {
+        const proposal = installSkills(target);
+        if (!('changes' in proposal)) throw new Error('Expected an installation preview');
+        ui.say(`Install official Easy Skills ${VERSION} skills in ${target}:\n` + proposal.changes.map(c => `${c.before === null ? 'Create' : 'Back up and replace'} ${c.path}`).join('\n'));
+        if (!proposal.changes.length) {ui.say('Official skills are already current.'); return;}
+        if (await ui.confirm('install:approve', 'Install these packaged skills, preserving backups of existing files?')) {
+          installSkills(target, proposal.hash); ui.say('Official skills installed. Restart your client to refresh skill discovery.');
+        }
+      } finally {ui.close();}
+    } else output(installSkills(target, opts.applyHash));
   });
 program.command('uninstall-skills').requiredOption('--target <directory>', 'Previously used install destination').option('--apply-hash <hash>')
   .action(opts => output(uninstallSkills(opts.target, opts.applyHash)));
@@ -183,4 +266,9 @@ program.command('inspect-compose').requiredOption('--file <yaml>').requiredOptio
   .action(async opts => output(await inspectCompose(resolve(opts.file), opts.feature, cwd())));
 program.command('_worker <id>', {hidden: true}).action(async id => withStore(store => worker(store, id)));
 
-program.parseAsync().catch(error => {process.stderr.write(redact(message(error)) + '\n'); process.exitCode = 1;});
+program.parseAsync().catch(error => {
+  const detail = message(error);
+  process.stderr.write(redact(/dubious ownership|unsafe repository/i.test(detail)
+    ? 'Git refused repository ownership. Open a terminal as the repository owner, or use a checkout owned by your current account, then retry. Easy Skills did not change global Git trust settings.' : detail) + '\n');
+  process.exitCode = 1;
+});

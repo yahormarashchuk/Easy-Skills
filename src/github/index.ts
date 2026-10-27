@@ -5,6 +5,7 @@ import { redact } from '../util.js';
 
 export interface MergeOptions {base: string; policy?: MergePolicy; operationId?: string}
 export interface MergeResult {state: 'merged' | 'pending' | 'enqueued'; operationId?: string}
+export interface Issue {number: number; title: string; body: string; url: string; labels: string[]; state: string}
 export class GitHubHttpError extends Error {
   constructor(readonly status: number, readonly body: any) {super(`GitHub HTTP ${status}: ${redact(body?.message || body?.details?.message || 'request failed')}`);}
 }
@@ -13,6 +14,7 @@ export class MergeTerminalError extends Error {
 }
 
 export interface GitHub {
+  readIssue?(number: number): Promise<Issue>;
   issue(key: string, title: string, body: string): Promise<number>;
   pr(key: string, title: string, body: string, head: string, base: string): Promise<PullRequest>;
   viewPr(number: number): Promise<PullRequest>;
@@ -62,6 +64,15 @@ export class Gh implements GitHub {
     if (!entry || typeof entry.id !== 'string') throw new Error('Incomplete merge queue membership response');
     return true;
   }
+  async readIssue(number: number): Promise<Issue> {
+    if (!Number.isSafeInteger(number) || number <= 0) throw new Error('Use a positive Issue number');
+    const issue = await this.api<any>(`issues/${number}`);
+    if (issue.pull_request) throw new Error('The supplied number identifies a Pull Request, not an Issue');
+    if (issue.number !== number || typeof issue.title !== 'string' || issue.body != null && typeof issue.body !== 'string' || typeof issue.state !== 'string' || !Array.isArray(issue.labels || []))
+      throw new Error('GitHub returned an incomplete or mismatched Issue');
+    return {number, title: redact(issue.title), body: redact(issue.body || ''), url: `https://github.com/${this.repository}/issues/${number}`,
+      labels: (issue.labels || []).map((label: any) => redact(typeof label === 'string' ? label : String(label.name))), state: issue.state};
+  }
   async issue(key: string, title: string, body: string): Promise<number> {
     const marker = `<!-- easy-skills:${key} -->`;
     for (let page = 1; ; page++) {
@@ -83,7 +94,11 @@ export class Gh implements GitHub {
     for (let page = 1; ; page++) {
       const prs = await this.api<any[]>(`pulls?state=all&head=${encodeURIComponent(this.repository.split('/')[0] + ':' + head)}&base=${encodeURIComponent(base)}&per_page=100&page=${page}`);
       const match = prs.find(pr => pr.body?.includes(marker));
-      if (match) return this.fromApi(match);
+      if (match) {
+        if (match.state !== 'open' || match.merged_at) throw new Error('Existing task PR is closed or merged; reconcile before publishing');
+        // Refresh the same PR after feedback; the stable marker also recovers PATCH interruptions.
+        return this.fromApi(await this.api(`pulls/${match.number}`, 'PATCH', {title: redact(title), body: `${redact(body)}\n\n${marker}`}));
+      }
       if (prs.length < 100) break;
     }
     return this.fromApi(await this.api('pulls', 'POST', {title: redact(title), body: `${redact(body)}\n\n${marker}`, head, base, draft: false}));

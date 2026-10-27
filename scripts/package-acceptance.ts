@@ -43,5 +43,41 @@ try {
     return {code: 0, stdout: '', stderr: '', timedOut: false, truncated: false};
   });
   assert.equal((await client.run({provider: 'codex', model: 'fixture-exact'}, 'fixture', {cwd: f.root, mode: 'read'})).outcome, 'passed');
-  console.log(JSON.stringify({compiledFeature: 'merged', packagedSkills: true, compiledProtocol: true, realExternalActions: false}));
+  const ui = {say(_text: string) {}, async ask() {return 'Preserve compatibility';}, async confirm() {return true;}};
+  const profile = {name: 'Package fixture', assignments: f.run.plan.assignments};
+  const github = Object.assign(f.github, {async readIssue(number: number) {
+    return {number, title: 'Package task', body: 'Deliver a focused behavior.', url: 'https://github.com/test/example/issues/' + number, labels: [], state: 'open'};
+  }});
+  const guidedClient = {...f.client, async run(a: any, prompt: string, options: any) {
+    if (options.stage === 'DEFINE') return {outcome: 'passed', findings: [], summary: JSON.stringify({summary: 'Focused package task', questions: [], specification: 'Deliver the package task. ' + (prompt.includes('Developer feedback:') ? 'Apply feedback.' : ''), acceptance: ['Behavior is verified'], outOfScope: ['Other work']})};
+    if (options.stage === 'PLAN') {
+      const seed = JSON.parse(prompt.split('small sequentially executable slices:\n')[1]!.split('\n')[0]!);
+      seed.tasks = [{id: 'package', title: 'Package task', description: seed.spec, acceptance: ['Behavior is verified'], dependsOn: [], scope: {areas: [], paths: ['direct.txt']}}];
+      return {outcome: 'passed', summary: 'Planned', findings: [], plan: compiled.Plan.parse(seed)};
+    }
+    if (options.stage === 'BUILD') writeFileSync(join(options.cwd, 'direct.txt'), prompt.includes('Apply feedback.') ? 'updated\n' : 'initial\n');
+    return f.client.run(a, prompt, options);
+  }};
+  const wizard = new compiled.Guided(store, ui, {client: guidedClient, github, testRemote: f.remote});
+  await wizard.profile(f.root, true, profile); await wizard.onboard(f.root, profile);
+  const plan = await wizard.proposal(f.root, '909', profile), direct = await wizard.approve(f.root, plan);
+  const directEngine = new compiled.Engine(store, {client: guidedClient, github, testRemote: f.remote});
+  const directReady = await directEngine.run(direct.id);
+  assert.equal(directReady.status, 'ready', directReady.reason || '');
+  assert.equal(directReady.parentIssue, 909); assert.equal(directReady.tasks[0].worktree, undefined);
+  const revised = await wizard.proposal(f.root, 'Apply feedback.', profile, directReady);
+  const revisedRun = await wizard.approve(f.root, revised, directReady);
+  const updated = await directEngine.run(revisedRun.id);
+  assert.equal(updated.status, 'ready', updated.reason || ''); assert.equal(updated.finalPr.number, directReady.finalPr.number);
+  const answers = join(f.dir, 'installation consent.json'); writeFileSync(answers, JSON.stringify({'install:approve': true}));
+  const interactiveTarget = join(f.dir, 'interactive packaged skills');
+  const interactive = await execute({command: process.execPath, args: [cli, 'install-skills', '--client', 'codex', '--target', interactiveTarget, '--interactive', '--non-interactive', '--answers', answers]}, {cwd: f.root});
+  assert.equal(interactive.code, 0, interactive.stderr); assert.ok(existsSync(join(interactiveTarget, 'easy-init/SKILL.md')));
+  for (const command of ['init', 'run', 'revise', 'config', 'rules']) {
+    const result = await execute({command: process.execPath, args: [cli, command, '--help']}, {cwd: f.root});
+    assert.equal(result.code, 0, result.stderr); assert.match(result.stdout, /--non-interactive/);
+  }
+  const readable = await execute({command: process.execPath, args: [cli, 'status', '909']}, {cwd: f.root, env: {EASY_SKILLS_HOME: store.home}});
+  assert.equal(readable.code, 0, readable.stderr); assert.match(readable.stdout, /Task #909: ready/);
+  console.log(JSON.stringify({compiledFeature: 'merged', compiledDirectTask: 'ready', samePrFeedback: true, packagedSkills: true, compiledProtocol: true, realExternalActions: false}));
 } finally {store.close(); await f.dispose();}

@@ -44,6 +44,13 @@ export const Task = z.object({
   scope: z.object({areas: z.array(Identifier), paths: z.array(z.string().min(1).refine(p => !p.startsWith('/') && !p.includes('..') && !p.includes(':') && !p.includes('\\'), 'Use repository-relative POSIX paths'))}).strict().optional(),
 }).strict();
 export type Task = z.infer<typeof Task>;
+// Optional on legacy plans: adding this field must never rewrite an old approval.
+export const DirectWorkflow = z.object({mode: z.literal('direct'), issue: z.number().int().positive().optional(),
+  baseHead: z.string().regex(/^[a-f0-9]{40,64}$/),
+  permissions: z.object({pushBranch: z.boolean(), createPullRequest: z.boolean(), closeIssueOnMerge: z.boolean()}).strict(),
+  context: z.record(z.string().regex(/^\.easy-skills\/(?:rules\/[^:]+|context\/[^:]+|project\.yaml|decisions\/onboarding\.json)$/)
+    .refine(p => !p.includes('..') && !p.includes('\\')), z.string()),
+}).strict();
 export const Plan = z.object({
   schemaVersion: z.union([z.literal(1), z.literal(2)]), featureId: Identifier, title: z.string().min(1),
   spec: z.string().min(1), project: Project, assignments: Assignments,
@@ -54,7 +61,12 @@ export const Plan = z.object({
   protectedInputs: z.record(z.string(), z.string().nullable()).optional(),
   permissions: z.object({publishIssues: z.boolean(), mergeIntermediate: z.boolean()}).strict(),
   verification: z.object({diagnostics: z.array(Identifier), browserTools: z.array(z.string().regex(/^mcp__[\w-]+__[\w-]+$/))}).strict().optional(),
+  workflow: DirectWorkflow.optional(),
 }).strict().superRefine((plan, ctx) => {
+  if (plan.workflow && (plan.tasks.length !== 1 || plan.tasks[0]?.dependsOn.length || plan.permissions.mergeIntermediate || plan.permissions.publishIssues))
+    ctx.addIssue({code: 'custom', message: 'Direct tasks require one independent task and prohibit Issue creation and intermediate merges'});
+  if (plan.workflow && !plan.tasks[0]?.scope?.paths.length)
+    ctx.addIssue({code: 'custom', message: 'Direct tasks require explicit implementation and test scope paths'});
   if (plan.schemaVersion === 2 && (!plan.repairPolicy || !plan.protectedInputs || plan.project.schemaVersion !== 2))
     ctx.addIssue({code: 'custom', message: 'Plan v2 requires project v2, an explicit repair policy and protected verification manifest'});
   const ids = new Set(plan.tasks.map(t => t.id));

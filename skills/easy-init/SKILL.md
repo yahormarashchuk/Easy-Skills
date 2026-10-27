@@ -3,6 +3,13 @@ name: easy-init
 description: Inspect an existing project and interview its owner to establish Easy Skills rules and context.
 ---
 
+For normal terminal onboarding, run `easy-skills init`. It discovers maintained examples,
+uses the selected DEFINE model to investigate unresolved questions, and asks the owner
+to approve readable rules and commands. Do not make the owner prepare configuration or
+copy digests. It preserves instructions and sends no GitHub mutations. New task plans
+carry local approved context without requiring a setup PR merge.
+
+The following procedure remains available for advanced, skill-led onboarding.
 Read [the workflow contract](references/workflow.md). Start with `easy-skills inspect`.
 Use [the interview procedure](references/interview.md) to maintain unresolved decisions,
 investigate repository facts, resolve contradictions and avoid repeated questions.

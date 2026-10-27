@@ -8,12 +8,18 @@ Write generated specifications, plans, Issues, PRs, questions, reports, notifica
 and other project documentation in English, including when the initial request uses
 another language. Preserve exact technical identifiers and required literal values.
 
-The feature's approved `execution.yaml` assigns exact provider/model identifiers to
+The approved plan (or advanced `execution.yaml`) assigns exact provider/model identifiers to
 DEFINE, PLAN, BUILD, VERIFY, REVIEW and SHIP. Never invent a model alias or silently
 fall back to another provider. Conflict repair inherits BUILD and its review inherits
 REVIEW. Git, check execution, polling and email delivery are deterministic runner work.
 
-Only one Issue executes inside a feature. A dependency is satisfied after its PR is
+Direct mode reuses one existing Issue or creates no Issue, uses one task branch/PR,
+and stops for manual review without an intermediate merge. Approved project knowledge
+is supplied in the stage prompt even if it does not exist on the base branch. Never
+copy or edit that managed knowledge in the task branch. Only displayed task paths
+are authorized for implementation. Feedback requires a reviewed replacement approval.
+
+Only one Issue executes inside an advanced feature. A dependency is satisfied after its PR is
 confirmed merged into the integration branch, even if the Issue has already closed.
 Different features have separate worktrees and explicit shared-resource locks.
 

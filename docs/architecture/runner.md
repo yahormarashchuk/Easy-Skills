@@ -7,8 +7,9 @@ key is required. Official CLI authentication is used as published by each vendor
 `src/contracts.ts` is the source of the versioned project, assignment, plan and stage
 result contracts. `npm run build` exports JSON schemas. Plans bind the project rules
 hash, package versions, explicit model assignments, dependency DAG, checks and publish/
-intermediate merge permissions. Approval is a separate command with the exact plan hash.
-DEFINE happens interactively through the skills. `feature plan` invokes the selected
+intermediate merge permissions. The guided terminal records the exact plan hash after
+explicit review and confirmation; advanced approval remains a separate command.
+DEFINE runs through the terminal interview or installed skills. `feature plan` invokes the selected
 PLAN CLI/model read-only and writes an unapproved draft; the worker starts at BUILD.
 
 Each SQLite update uses an optimistic revision check and appends its event in one
@@ -48,6 +49,13 @@ before acting. Merge recovery consults the PR's actual merged state. The runner 
 not force-push or force-remove worktrees. It retains branches after cleanup, including
 squash-merged branches. External systems cannot be included in a SQLite transaction;
 reconciliation and conservative stops are therefore required, not exactly-once claims.
+
+Direct plans select one task branch/worktree and one final PR. They reuse an existing
+Issue or publish no Issue, skip task integration/merges, and use the final verification,
+review, repair and shipping machine. Their approved knowledge snapshot travels without
+a setup commit on main. Feedback records old approval/evidence, replaces the plan after
+new consent, revokes readiness and updates the same PR. PR delivery needs no merge
+policy; automatic merge remains separately gated. See [guided contracts](../guided-workflow.md).
 
 The state home defaults to `%LOCALAPPDATA%/EasySkills` on Windows and
 `~/.local/share/EasySkills` elsewhere. `EASY_SKILLS_HOME` overrides it, but it must be
