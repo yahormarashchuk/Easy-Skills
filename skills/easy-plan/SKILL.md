@@ -12,13 +12,17 @@ Run `easy-skills feature plan --file <request.yaml> --out <execution.yaml>` to l
 the assigned PLAN CLI/model in read-only mode. It preserves agreed fields and produces
 an unapproved local draft; it must not implement or publish anything.
 
-Produce spec.md, plan.md and execution.yaml using the packaged plan schema and
+The internal model follows [the PLAN procedure](references/plan-stage.md) and returns
+structured data. The CLI writes execution.yaml using the packaged plan schema and
 [references/feature.yaml](references/feature.yaml). The machine contract is
 [references/plan.schema.json](references/plan.schema.json). Include acyclic dependencies, current rulesHash, runner and
 skills versions, required commands, and publish/merge permissions. Do not assume a
 particular framework. Each Issue gets a PR into the feature integration branch.
 
 Validate using `easy-skills feature draft --file <execution.yaml>`. This creates only
-a local draft. Show its planHash with the complete plan for user approval. Use
+a local draft and owns spec.md, plan.md and execution.yaml under an attempt-specific
+directory reported in its output. Preserve earlier attempts. Show its planHash,
+protected inputs, setup commands, diagnostic permissions and completed repair limit
+with the complete plan for user approval. Use
 `easy-skills feature approve <run> --hash <reviewed-hash>` only when the user's answer
 authorizes that specific version. Then `easy-skills start <run>` starts the worker.

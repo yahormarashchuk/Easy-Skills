@@ -50,13 +50,13 @@ test('config edits preserve backups, reject stale proposals and roll back failed
     assert.equal(readFileSync(path, 'utf8'), '{"unrelated":true}\n');
     const result = await applyConfig(path, {unrelated: true, mcpServers: {}}, proposal.hash,
       {command: process.execPath, args: ['-e', 'process.exit(0)']}, dir);
-    assert.ok(result.backup && existsSync(result.backup)); assert.equal(result.verified, true);
+    assert.ok(result.backup && existsSync(result.backup)); assert.equal(result.verified, false); assert.equal(result.commandSucceeded, true);
   } finally {rmSync(dir, {recursive: true, force: true});}
 });
 test('each installed skill contains its shared dependency and uninstall preserves user modifications', () => {
   const dir = mkdtempSync(join(tmpdir(), 'easy skills install '));
   try {
-    const proposal = installSkills(dir); installSkills(dir, proposal.hash);
+    const proposal = installSkills(dir); assert.ok('hash' in proposal); installSkills(dir, proposal.hash);
     assert.ok(existsSync(join(dir, 'easy-sync/references/workflow.md')));
     assert.ok(existsSync(join(dir, 'easy-plan/references/plan.schema.json')));
     assert.ok(existsSync(join(dir, 'easy-remote/references/remote-control.md')));

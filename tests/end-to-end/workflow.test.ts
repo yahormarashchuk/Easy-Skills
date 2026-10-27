@@ -13,7 +13,7 @@ for (const stack of ['node', 'python']) test(`approved feature completes sequent
     assert.throws(() => f.engine.approve(f.run.id, 'wrong'), /exact/);
     f.engine.approve(f.run.id, f.run.planHash);
     const ready = await f.engine.run(f.run.id);
-    assert.equal(ready.status, 'ready', ready.reason);
+    assert.equal(ready.status, 'ready', ready.reason || '');
     assert.equal(ready.tasks.every(t => t.integrated), true);
     assert.equal(f.github.merges.length, 2); assert.equal(f.github.issues.get(ready.parentIssue!), true);
     const firstMerge = f.store.events(f.run.id).find(e => e.type === 'task.integrated')!;
@@ -47,7 +47,7 @@ test('quota wait preserves the exact session without consuming repair cycles', a
   try {
     f.engine.approve(f.run.id, f.run.planHash);
     let once = false, resumed: string | undefined;
-    const engine = new Engine(f.store, {github: f.github, client: {async run(a, p, o) {
+    const engine = new Engine(f.store, {testRemote: f.remote, github: f.github, client: {...f.client, async run(a, p, o) {
       if (!once) {once = true; o.onSession?.('quota-session'); throw new ClientError('quota', 'usage limit reached');}
       if (a.model === 'exact-BUILD' && o.cwd.endsWith('one')) resumed = o.session;
       return f.client.run(a, p, o);
@@ -55,8 +55,10 @@ test('quota wait preserves the exact session without consuming repair cycles', a
     const waiting = await engine.run(f.run.id);
     assert.equal(waiting.status, 'waiting_quota'); assert.equal(waiting.failures.count, 0);
     assert.ok(waiting.retryAt); assert.equal(waiting.tasks[0]!.sessions.BUILD, 'quota-session');
+    f.store.db.prepare('UPDATE probes SET checked_at=?').run(new Date(Date.now() - 48 * 60 * 60_000).toISOString());
+    for (const stage of ['DEFINE', 'PLAN']) f.store.db.prepare('DELETE FROM probes WHERE key=?').run(f.store.probeKey(f.run.plan.assignments[stage as 'PLAN']));
     const ready = await engine.run(f.run.id);
-    assert.equal(ready.status, 'ready', ready.reason); assert.equal(resumed, 'quota-session');
+    assert.equal(ready.status, 'ready', ready.reason || ''); assert.equal(resumed, 'quota-session');
   } finally {await f.dispose();}
 });
 test('a live orphan child blocks recovery without launching a replacement', async () => {

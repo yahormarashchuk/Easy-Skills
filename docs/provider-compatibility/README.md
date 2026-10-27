@@ -1,5 +1,11 @@
 # Client compatibility
 
+**Alpha.2:** the adapter execution policy changed, so these historical model probes
+do not authorize current execution. Real Claude launches are refused because managed
+hook exclusion cannot be verified before execution. Codex's configuration-only empty
+MCP/hook restriction check passed locally on 2026-10-22; no revised model launch/resume
+probe was performed. See [the current implementation record](../reliability-implementation.md).
+
 Observed locally on 2026-10-21, Windows, Node.js 24.22.0, Git 2.45.1:
 
 | Client | Observation | Scope |
@@ -8,25 +14,39 @@ Observed locally on 2026-10-21, Windows, Node.js 24.22.0, Git 2.45.1:
 | Claude Code 2.1.306 | Native Windows executable at ~/.local/bin/claude.exe; claude.ai login; read-only `claude-sonnet-5-5` request and exact-ID resume passed | Real provider, two small turns; assigned model matched reported events; not a full autonomous feature acceptance run |
 | GitHub CLI 2.102.0 | Installed and authenticated | Production Issue/PR mutations were not performed during implementation |
 
-Reproduce the opt-in client check using `npm run smoke:clients -- codex EXACT_ID` or
+These are historical observations of the original alpha adapter. The revised schema,
+final-output and MCP permission paths have fixture coverage and need fresh real-client
+probes; the table does not claim those revisions passed live E2E.
+
+After explicit permission, set `EASY_SKILLS_ALLOW_CLIENT_PROBES=1` and reproduce the
+opt-in client check using `npm run smoke:clients -- codex EXACT_ID` or
 `claude-code EXACT_ID`. To allow a worker to use a configuration, use `easy-skills doctor
 --provider codex --model EXACT_ID --probe`, which performs a request and exact session
-resume and stores a 24-hour probe result outside the repo. No default/alias mapping is
+resume and stores the exact assignment, executable path and version outside the repo.
+Execution compares that identity plus its execution-policy generation and checks authentication again, without expiring
+compatibility solely because a quota wait lasted more than 24 hours. Changed clients
+and older identity-less probes require a reviewed fresh probe. No default/alias mapping is
 maintained; availability is verified through the actual selected client's response.
 
-Codex uses saved CLI login, `exec --json`, and `exec resume SESSION --json`, with global
+Codex uses saved CLI login, `exec --json --output-schema ... --output-last-message ...`
+and explicit resume with the same output channels, with global
 workspace-write/read-only and noninteractive approval options. Claude uses stdin,
-`-p --output-format stream-json --verbose --model ID`, explicit --resume, dontAsk and
+`-p --output-format stream-json --verbose --json-schema ... --model ID`, explicit --resume, dontAsk and
 stage-specific tool permissions. No --bare, continue-last or bypass-sandbox option is
 used. Official client binaries and their authentication files remain unchanged.
+Interim agent messages never establish completion. Small structured schemas are
+runtime-validated; PLAN serializes its complex Plan for separate validation. VERIFY
+can use plan-approved diagnostics/browser capabilities. See [MCP details](../mcp.md).
 
 Claude invocations use a temporary per-invocation settings file to disable configured
 fallback chains and automatic content-based switching. Reported startup/assistant/result
 models are checked against the exact assigned ID; a mismatch stops the task. A managed
-policy or upstream client can still reject that configuration. This behavior follows
-[Claude's documented model configuration](https://code.claude.com/docs/en/model-config)
-and was exercised with authenticated Claude Code 2.1.306 and `claude-sonnet-5-5`.
-Other installed versions and model configurations need their own probe.
+policy or upstream client can still reject that configuration. The intended controls
+follow [Claude's documented model configuration](https://code.claude.com/docs/en/model-config).
+Model identity alone was checked in the original tool-free probe with Claude Code 2.1.306 and
+`claude-sonnet-5-5`. That observation does not validate the revised fallback, permission
+or hook configuration. Current real launch refusal takes precedence over the older
+usage examples. Other versions/configurations need their own authorized validation.
 
 These options follow [OpenAI non-interactive documentation](https://developers.openai.com/codex/noninteractive),
 the [Claude CLI reference](https://code.claude.com/docs/en/cli-reference), and

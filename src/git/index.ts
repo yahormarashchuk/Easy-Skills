@@ -2,13 +2,27 @@ import { join, resolve, dirname } from 'node:path';
 import { existsSync, realpathSync } from 'node:fs';
 import { checked, execute } from '../process.js';
 import { ensureDir, isInside } from '../util.js';
+import { githubRepository } from './remotes.js';
 
 export class Git {
-  constructor(public root: string, private gate?: <T>(operation: () => Promise<T>) => Promise<T>) {}
+  constructor(public root: string, private gate?: <T>(operation: () => Promise<T>) => Promise<T>,
+    private remotePolicy?: {repository: string; testRemote?: string}) {}
   run(args: string[], cwd = this.root): Promise<string> {
-    const operation = () => checked('git', args, cwd);
+    const operation = async () => {
+      if (['fetch', 'push', 'ls-remote'].includes(args[0]!)) await this.validateRemotes(cwd);
+      return checked('git', args, cwd, undefined, !args.includes('-z') && args[0] !== 'diff');
+    };
     // Worktrees share refs and FETCH_HEAD. Serialize their mutations across features.
     return this.gate && ['fetch', 'push', 'worktree', 'update-ref'].includes(args[0]!) ? this.gate(operation) : operation();
+  }
+  async validateRemotes(cwd = this.root) {
+    if (!this.remotePolicy) throw new Error('External Git operation requires an approved repository policy');
+    for (const direction of [[], ['--push']]) {
+      const urls = (await checked('git', ['remote', 'get-url', ...direction, '--all', 'origin'], cwd)).split(/\r?\n/);
+      if (!urls.length) throw new Error('origin has no effective destination');
+      for (const url of urls) if (url.replaceAll('\\', '/') !== this.remotePolicy.testRemote?.replaceAll('\\', '/') && githubRepository(url) !== this.remotePolicy.repository.toLowerCase())
+        throw new Error('Effective origin destination differs from the approved GitHub repository');
+    }
   }
   async identity(): Promise<{root: string; commonDir: string}> {
     const root = realpathSync.native(await this.run(['rev-parse', '--show-toplevel']));
@@ -70,7 +84,10 @@ export class Git {
     else if (diff.code !== 0) throw new Error(diff.stderr);
     return this.head(cwd);
   }
-  async push(branch: string, cwd: string) {await this.run(['push', '--set-upstream', 'origin', `HEAD:refs/heads/${branch}`], cwd);}
+  async push(branch: string, cwd: string) {
+    if (await this.run(['symbolic-ref', '--short', 'HEAD'], cwd) !== branch) throw new Error('Worktree branch ownership changed before push');
+    await this.run(['push', '--set-upstream', 'origin', `HEAD:refs/heads/${branch}`], cwd);
+  }
   async assertOwned(path: string, branch: string, allowedRoot: string) {
     if (!isInside(allowedRoot, path)) throw new Error('Worktree is outside the owned resource directory');
     const actual = await this.run(['symbolic-ref', '--short', 'HEAD'], path);

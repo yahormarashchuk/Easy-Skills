@@ -6,6 +6,8 @@ import { Git } from '../git/index.js';
 import { ensureDir, hash, rejectSymlinkPath } from '../util.js';
 import { packageRoot } from '../runner/context.js';
 import { skillResources } from '../skills.js';
+import { draftInterview } from '../runner/onboarding.js';
+import { applyProposal } from '../integrations/config.js';
 
 export async function inspectProject(cwd: string) {
   const git = new Git(cwd), identity = await git.identity();
@@ -19,6 +21,7 @@ export async function initProject(cwd: string, config: unknown, applyHash?: stri
   const project = Project.parse(config), inspection = await inspectProject(cwd);
   const entries: Record<string, string> = {
     '.easy-skills/project.yaml': stringify(project),
+    '.easy-skills/decisions/onboarding.json': JSON.stringify(draftInterview(), null, 2) + '\n',
     '.easy-skills/context/project-map.md': `# ${project.name}\n\nDiscovered manifests:\n${inspection.manifests.map(p => '- ' + p).join('\n') || '(none)'}\n\nThis is an inventory, not an approved architecture. Read current code before each task.\n`,
     '.easy-skills/context/glossary.md': '# Glossary\n\nRecord agreed project terms here.\n',
     '.easy-skills/rules/architecture.md': '# Architecture\n\nPending interview: identify maintained examples, boundaries and deprecated patterns.\n',
@@ -49,6 +52,16 @@ export async function initProject(cwd: string, config: unknown, applyHash?: stri
   return {...proposal, applied: true, next: 'Complete the easy-init interview; agree rules and required checks before approving a feature.'};
 }
 export function loadProject(root: string): Project {return Project.parse(parse(readFileSync(join(root, '.easy-skills/project.yaml'), 'utf8')));}
+export async function updateProject(root: string, input: unknown, approvedHash?: string) {
+  const project = Project.parse(input), path = join(root, '.easy-skills/project.yaml');
+  if (project.schemaVersion !== 2) throw new Error('New configuration requires project contract v2');
+  rejectSymlinkPath(root, path);
+  const before = readFileSync(path, 'utf8'), after = stringify(project);
+  const proposal = {path, before, after, hash: hash({path, before, after})};
+  if (!approvedHash) return {...proposal, next: 'Review this configuration, then renew rules agreement and create a separately approved v2 plan; existing approvals stay unchanged'};
+  const result = await applyProposal(proposal, approvedHash, async () => {loadProject(root);});
+  return {...result, verified: false, configurationParsed: true, next: 'Renew rules agreement before planning; existing run JSON and approvals were preserved'};
+}
 
 export function skillManifest() {
   return readdirSync(join(packageRoot, 'skills'), {withFileTypes: true})

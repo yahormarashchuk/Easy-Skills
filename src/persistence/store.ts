@@ -6,12 +6,15 @@ import { setTimeout as delay } from 'node:timers/promises';
 import type { Run, Plan } from '../contracts.js';
 import { VERSION, RunSchema } from '../contracts.js';
 import { alive, ensureDir, hash, now, stateHome } from '../util.js';
+import { processIdentity, ownerAlive } from '../process-identity.js';
+import { EXECUTION_POLICY } from '../execution.js';
 
 export class ResourceBusy extends Error {}
 
 export class Store {
   readonly db: DatabaseSync;
   readonly home: string;
+  private transactionDepth = 0;
   constructor(home = stateHome()) {
     this.home = ensureDir(home);
     this.db = new DatabaseSync(join(home, 'runner.db'));
@@ -26,14 +29,37 @@ export class Store {
       CREATE TABLE IF NOT EXISTS probes (key TEXT PRIMARY KEY, checked_at TEXT NOT NULL, version TEXT NOT NULL);
     `);
     const schema = this.db.prepare('SELECT value FROM meta WHERE key=?').get('schema');
-    if (schema && schema.value !== '1') throw new Error('Unsupported database schema; use the matching runner version');
-    this.db.prepare('INSERT OR IGNORE INTO meta VALUES (?,?)').run('schema', '1');
+    if (schema && !['1', '2', '3'].includes(String(schema.value))) throw new Error('Unsupported database schema; use the matching runner version');
+    if (schema?.value === '1') this.db.prepare('VACUUM INTO ?').run(join(home, `runner-before-v2-${Date.now()}-${randomUUID()}.db`));
+    if (!schema || schema.value === '1') this.transaction(() => {
+      // Another process may have migrated after discovery but before BEGIN IMMEDIATE.
+      const current = this.db.prepare('SELECT value FROM meta WHERE key=?').get('schema');
+      if (current?.value === '2' || current?.value === '3') return;
+      if (current && current.value !== '1') throw new Error('Database schema changed while opening; use the matching runner version');
+      this.db.exec(`ALTER TABLE notifications ADD COLUMN lease_owner TEXT;
+        ALTER TABLE notifications ADD COLUMN lease_until TEXT;
+        ALTER TABLE notifications ADD COLUMN retry_at TEXT;
+        ALTER TABLE decisions ADD COLUMN operation_key TEXT;
+        ALTER TABLE probes ADD COLUMN executable TEXT;`);
+      this.db.prepare('INSERT OR REPLACE INTO meta VALUES (?,?)').run('schema', '2');
+    });
+    if (this.db.prepare('SELECT value FROM meta WHERE key=?').get('schema')?.value !== '3') {
+      this.db.prepare('VACUUM INTO ?').run(join(home, `runner-before-v3-${Date.now()}-${randomUUID()}.db`));
+      this.transaction(() => {
+        if (this.db.prepare('SELECT value FROM meta WHERE key=?').get('schema')?.value === '3') return;
+        this.db.exec('ALTER TABLE locks ADD COLUMN process_identity TEXT');
+        this.db.prepare('INSERT OR REPLACE INTO meta VALUES (?,?)').run('schema', '3');
+      });
+    }
   }
   close() {this.db.close();}
   transaction<T>(fn: () => T): T {
-    this.db.exec('BEGIN IMMEDIATE');
-    try {const result = fn(); this.db.exec('COMMIT'); return result;}
-    catch (e) {this.db.exec('ROLLBACK'); throw e;}
+    const level = this.transactionDepth;
+    this.db.exec(level ? `SAVEPOINT nested_${level}` : 'BEGIN IMMEDIATE');
+    this.transactionDepth++;
+    try {const result = fn(); this.db.exec(level ? `RELEASE nested_${level}` : 'COMMIT'); return result;}
+    catch (e) {this.db.exec(level ? `ROLLBACK TO nested_${level}; RELEASE nested_${level}` : 'ROLLBACK'); throw e;}
+    finally {this.transactionDepth--;}
   }
   create(root: string, commonDir: string, plan: Plan): Run {
     for (const repository of [root, resolve(commonDir, '..')]) {
@@ -42,13 +68,17 @@ export class Store {
     }
     const run: Run = {
       id: randomUUID(), root, commonDir, plan, planHash: hash(plan), revision: 0,
-      status: 'draft', createdAt: now(), updatedAt: now(), branch: `feature/${plan.featureId}`,
+      status: 'draft', createdAt: now(), updatedAt: now(), branch: `${plan.workflow ? 'codex' : 'feature'}/${plan.featureId}`,
+      ...(plan.workflow?.issue ? {parentIssue: plan.workflow.issue} : {}),
       tasks: plan.tasks.map(t => ({id: t.id, integrated: false, cursor: 'BUILD', evidence: [], sessions: {}})),
       finalPhase: 'SYNC', finalEvidence: [], finalSessions: {}, failures: {fingerprint: '', head: '', count: 0},
     };
     this.transaction(() => {
-      if (this.list().some(r => r.commonDir === commonDir && r.plan.featureId === plan.featureId && r.status !== 'merged'))
+      if (this.list().some(r => r.commonDir === commonDir && r.plan.featureId === plan.featureId && !['merged', 'abandoned'].includes(r.status)))
         throw new Error('An unfinished run already uses this feature ID');
+      if (plan.workflow?.issue && this.list().some(r => r.commonDir === commonDir && r.plan.workflow?.issue === plan.workflow!.issue && !['merged', 'abandoned'].includes(r.status)))
+        throw new Error('An unfinished task already uses this Issue; resume or revise the existing task');
+      if (this.list().some(r => r.commonDir === commonDir && r.plan.featureId === plan.featureId)) run.branch += '-' + run.id.slice(0, 8);
       this.db.prepare('INSERT INTO runs VALUES (?,?,?,?)').run(run.id, root, run.revision, JSON.stringify(run));
       this.event(run.id, 'draft.created', {planHash: run.planHash, version: VERSION});
     });
@@ -79,12 +109,12 @@ export class Store {
   acquire(key: string): string {
     const owner = randomUUID();
     this.transaction(() => {
-      if (key.startsWith('environment:') && this.list().some(run => run.activeResource === key.slice('environment:'.length) && alive(run.childPid)))
+      if (key.startsWith('environment:') && this.list().some(run => run.activeResource === key.slice('environment:'.length) && ownerAlive(run.childPid, run.childIdentity)))
         throw new ResourceBusy('Resource has a live recorded child: ' + key);
       const existing = this.db.prepare('SELECT * FROM locks WHERE key=?').get(key);
-      if (existing && alive(Number(existing.pid))) throw new ResourceBusy('Resource is in use: ' + key);
+      if (existing && ownerAlive(Number(existing.pid), existing.process_identity ? String(existing.process_identity) : undefined)) throw new ResourceBusy('Resource is in use: ' + key);
       this.db.prepare('DELETE FROM locks WHERE key=?').run(key);
-      this.db.prepare('INSERT INTO locks VALUES (?,?,?,?)').run(key, owner, process.pid, now());
+      this.db.prepare('INSERT INTO locks(key,owner,pid,acquired_at,process_identity) VALUES (?,?,?,?,?)').run(key, owner, process.pid, now(), processIdentity(process.pid) || null);
     });
     return owner;
   }
@@ -102,8 +132,8 @@ export class Store {
     try {return await operation();} finally {this.release(key, owner);}
   }
   locked(key: string): boolean {
-    const row = this.db.prepare('SELECT pid FROM locks WHERE key=?').get(key);
-    return !!row && alive(Number(row.pid));
+    const row = this.db.prepare('SELECT pid,process_identity FROM locks WHERE key=?').get(key);
+    return !!row && ownerAlive(Number(row.pid), row.process_identity ? String(row.process_identity) : undefined);
   }
   operation<T>(key: string): T | undefined {
     const row = this.db.prepare('SELECT data FROM operations WHERE key=?').get(key);
@@ -115,31 +145,57 @@ export class Store {
   }
   enqueue(key: string, payload: unknown) {this.db.prepare('INSERT OR IGNORE INTO notifications(key,payload) VALUES (?,?)').run(key, JSON.stringify(payload));}
   pendingNotifications() {return this.db.prepare('SELECT * FROM notifications WHERE sent_at IS NULL').all();}
+  notificationSummary(runId?: string) {
+    const rows = this.pendingNotifications().filter(row => {
+      if (!runId) return true;
+      try {return JSON.parse(String(row.payload)).runId === runId;} catch {return false;}
+    });
+    return {pending: rows.length, retrying: rows.filter(row => Number(row.attempts) > 0).length};
+  }
   markSent(key: string) {this.db.prepare('UPDATE notifications SET sent_at=?,attempts=attempts+1 WHERE key=?').run(now(), key);}
   markAttempt(key: string) {this.db.prepare('UPDATE notifications SET attempts=attempts+1 WHERE key=?').run(key);}
-  probeKey(assignment: unknown) {return hash(assignment);}
-  recordProbe(assignment: unknown, version: string) {
-    this.db.prepare('INSERT INTO probes VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET checked_at=excluded.checked_at,version=excluded.version')
-      .run(this.probeKey(assignment), now(), version);
+  claimNotification(owner: string, leaseMs = 120_000) {
+    return this.transaction(() => {
+      const row = this.db.prepare(`SELECT * FROM notifications WHERE sent_at IS NULL
+        AND (retry_at IS NULL OR retry_at<=?) AND (lease_until IS NULL OR lease_until<=?) ORDER BY rowid LIMIT 1`).get(now(), now());
+      if (!row) return undefined;
+      this.db.prepare('UPDATE notifications SET lease_owner=?,lease_until=? WHERE key=?')
+        .run(owner, new Date(Date.now() + leaseMs).toISOString(), row.key!);
+      return row;
+    });
   }
-  hasProbe(assignment: unknown): boolean {
-    const row = this.db.prepare('SELECT checked_at FROM probes WHERE key=?').get(this.probeKey(assignment));
-    return !!row && Date.now() - Date.parse(String(row.checked_at)) < 24 * 60 * 60 * 1000;
+  completeNotification(key: string, owner: string): boolean {
+    return this.db.prepare('UPDATE notifications SET sent_at=?,lease_owner=NULL,lease_until=NULL,attempts=attempts+1 WHERE key=? AND lease_owner=?')
+      .run(now(), key, owner).changes === 1;
+  }
+  retryNotification(key: string, owner: string, attempts: number) {
+    this.db.prepare('UPDATE notifications SET lease_owner=NULL,lease_until=NULL,retry_at=?,attempts=attempts+1 WHERE key=? AND lease_owner=?')
+      .run(new Date(Date.now() + Math.min(60_000 * 2 ** Math.min(attempts, 8), 4 * 60 * 60_000)).toISOString(), key, owner);
+  }
+  probeKey(assignment: unknown) {return hash({assignment, executionPolicy: EXECUTION_POLICY});}
+  recordProbe(assignment: unknown, version: string, executable?: string) {
+    this.db.prepare('INSERT INTO probes(key,checked_at,version,executable) VALUES (?,?,?,?) ON CONFLICT(key) DO UPDATE SET checked_at=excluded.checked_at,version=excluded.version,executable=excluded.executable')
+      .run(this.probeKey(assignment), now(), version, executable || null);
+  }
+  hasProbe(assignment: unknown, identity?: {version?: string; executable?: string}): boolean {
+    const row = this.db.prepare('SELECT * FROM probes WHERE key=?').get(this.probeKey(assignment));
+    return !!row && (identity ? !!identity.executable && !!identity.version && row.version === identity.version && row.executable === identity.executable
+      : Date.now() - Date.parse(String(row.checked_at)) < 24 * 60 * 60 * 1000);
   }
   createDecision(run: Run, head: string, action: string, code: string, ttlMs = 15 * 60_000): string {
     const id = randomUUID();
-    this.db.prepare('INSERT INTO decisions VALUES (?,?,?,?,?,?,?,NULL)').run(
+    this.db.prepare('INSERT INTO decisions(id,run_id,plan_hash,head,action,code_hash,expires_at,consumed_at) VALUES (?,?,?,?,?,?,?,NULL)').run(
       id, run.id, run.planHash, head, action, hash(code), new Date(Date.now() + ttlMs).toISOString());
     return id;
   }
-  consumeDecision(id: string, run: Run, head: string, action: string, code: string): void {
+  consumeDecision(id: string, run: Run, head: string, action: string, code: string, operationKey?: string): void {
     this.transaction(() => {
       const row = this.db.prepare('SELECT * FROM decisions WHERE id=?').get(id);
       const digest = Buffer.from(hash(code));
       if (!row || row.run_id !== run.id || row.plan_hash !== run.planHash || row.head !== head || row.action !== action ||
-        row.consumed_at || Date.parse(String(row.expires_at)) < Date.now() ||
+        (row.consumed_at ? !operationKey || row.operation_key !== operationKey : Date.parse(String(row.expires_at)) < Date.now()) ||
         !timingSafeEqual(Buffer.from(String(row.code_hash)), digest)) throw new Error('Invalid, expired, stale, or already consumed decision');
-      this.db.prepare('UPDATE decisions SET consumed_at=? WHERE id=?').run(now(), id);
+      this.db.prepare('UPDATE decisions SET consumed_at=COALESCE(consumed_at,?),operation_key=? WHERE id=?').run(now(), operationKey || null, id);
     });
   }
 }

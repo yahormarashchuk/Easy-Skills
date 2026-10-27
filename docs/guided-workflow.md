@@ -1,0 +1,122 @@
+# Guided workflow and migration
+
+The terminal layer delegates interviews to DEFINE, technical planning to PLAN, and
+approved work to the existing runner. Exact assignments, rules agreements, protected
+verification controls and revision evidence remain authoritative. Model output is
+never deterministic check evidence.
+
+## Storage and trust
+
+`runner/discovery.ts` takes a bounded initial inventory: up to 40 text samples and
+80,000 characters. The selected client can inspect deeper relevant code read-only.
+Discovery never runs setup, tests, package scripts or GitHub mutations. Tracked skills
+are referenced; ignored/untracked skills are not automatically enumerated. Existing
+instructions and skills are preserved.
+
+Approved rules live in `.easy-skills/rules/approved-rules.md`; other existing rules
+remain in force. Configuration is `.easy-skills/project.yaml`. Source paths, owner
+answers and skill references are saved in `.easy-skills/context/knowledge.json`.
+The existing versioned onboarding agreement binds configuration and the complete
+rules hash. Inferred rules must cite existing repository paths. Relevance and content
+quality still depend on the selected model and owner review.
+
+The external SQLite journal stores profiles, interview answers/sessions, discovery
+cache, approval history and recoverable knowledge-write intents. An approval intent
+precedes writes; recovery accepts only approved before/after content and refuses
+intervening edits. Backups remain. State must stay outside the repository.
+
+Direct plans carry approved project knowledge without copying it into the task branch.
+Protected checks validate the snapshot plus actual code/check controls. Guards reject
+task edits to managed knowledge. No setup PR merge is required. Existing AGENTS.md,
+CLAUDE.md and client settings must match the approved rules; dirty changes to those
+controls require reconciliation before execution. General dirty developer work stays
+untouched in the original checkout.
+
+Approved owner choices and project rules govern the task. Repository examples,
+skills, Issues and references are evidence, never permission to expand scope, tool
+rights or model assignments. Agents do not receive private sessions or runner logs.
+
+## Direct delivery and feedback
+
+Optional `plan.workflow` binds the base commit, Issue, knowledge and separate push,
+PR and Issue-completion permissions. It requires one independent task and prohibits
+Issue creation and intermediate merges. Older plans without this field retain their
+advanced feature behavior and serialized identity. Direct branches use `codex/`.
+The historical internal worktree resource name remains `integration`; only one task
+branch and worktree exist.
+
+Direct BUILD enters the existing final SYNC, VERIFY, REVIEW and SHIP machine. Baseline
+evidence, setup/resource locks, protected controls, complete file review coverage,
+bounded repairs, commit intents, worker locks and network reconciliation still apply.
+Missing prerequisites and baseline failures stop for a decision. Required checks are
+never removed to make delivery succeed.
+
+Stable PR markers recover publication interruptions. Feedback updates the same PR
+and branch after a new approval, retaining the previous plan, approval, evidence,
+reviewed head and sessions. Sessions continue only for unchanged assignments. Old
+readiness is invalidated. Feedback cannot change Issue identity, project or external
+permissions; those changes require a separately reviewed task.
+
+PR delivery does not query branch-protection APIs. Automatic merging still requires
+the existing strict/queue policy and separate exact-head consent. Manual merges are
+reconciled against the saved approval, PR identity, reviewed revision and evidence.
+Issue completion follows actual merge. Ready workers still monitor base movement.
+
+## Scripted inputs
+
+Guided commands accept `--non-interactive --answers FILE`. The JSON object maps prompt
+IDs to text or booleans. Missing inputs fail with their ID, including when a terminal
+default exists. Generated rule and execution approvals require `approve:DIGEST` for
+the exact displayed proposal; booleans cannot approve unseen generated work. A missing
+approval reports the required digest after showing the proposal. Review the output,
+then supply that value on a subsequent invocation. Unapproved drafts persist and
+reuse their identity; changed source inputs invalidate the binding. Interactive
+confirmations do not display digests. These are owner-supplied
+inputs, never model-generated approval files or Issue attachments.
+
+Example profile import without model requests:
+
+```powershell
+easy-skills config --profile-file profile.json --non-interactive --answers consent.json
+```
+
+The profile contains `name` and six exact `assignments`; consent contains
+`{"profile:save": true}`. Copy model IDs from the installed official client.
+
+| Prompt ID | Meaning |
+| --- | --- |
+| `profile:reuse` | Reuse displayed saved assignments |
+| `profile:name`, `profile:provider`, `profile:model` | Create an assignment profile |
+| `profile:customize` | Edit individual stages |
+| `profile:STAGE:provider`, `profile:STAGE:model` | Exact stage assignment |
+| `model-requests` | Allow read-only interviews/planning using account quota |
+| `probe:PROVIDER:MODEL` | Allow launch/resume compatibility validation |
+| `interview:QUESTION_ID` | Answer a model-derived unresolved question |
+| `rules:approve` | Save displayed rules and commands |
+| `task:specification` | Continue planning with displayed requirements |
+| `task:approve` | Approve exact displayed execution/revision proposal |
+| `install:approve` | Install displayed packaged skills with backups |
+
+Question IDs are model-derived. Fully scripted operation needs answers to the actual
+questions. Declining execution leaves local interview/planning records but creates
+no branch, Issue or PR.
+
+## Migration and limits
+
+Existing alpha.2 configuration loads unchanged. `init` reuses a current agreement;
+draft/stale agreements enter onboarding. Replacements back up managed files. Changes
+invalidate old plan execution. Database schema remains v3, and previous approved
+JSON is never silently upgraded. Legacy reliability contracts still need replacement
+approval. See the older [migration record](reliability-implementation.md).
+
+Claude real execution remains blocked until managed-hook isolation can be verified.
+Saved assignments are preserved; replacement requires explicit profile editing.
+Probe identity includes executable, version and execution policy; authentication is
+rechecked. No direct API key is required.
+
+Complex dependent work still uses advanced feature commands; automatic selection of
+advanced mode is not implemented. Branch prefixes are not inferred from project
+conventions. Protected instruction hashing retains an exhaustive safety scan, so
+initial inventory limits do not bound total onboarding time. Interview quality,
+large-project latency, Windows reboot recovery and live provider/GitHub behavior need
+authorized field acceptance. The real TS Studio repository is not modified by tests.

@@ -7,13 +7,31 @@ import { Engine } from '../../src/runner/engine.js';
 import { pollRemote } from '../../src/runner/remote.js';
 import { flushNotifications } from '../../src/notifications/index.js';
 
+test('whole-feature repair stops after three unresolved failures despite new commits', async () => {
+  const f = await fixture(); let repairs = 0;
+  try {
+    f.engine.approve(f.run.id, f.run.planHash);
+    const engine = new Engine(f.store, {testRemote: f.remote, github: f.github, client: {...f.client, async run(a, p, o) {
+      if (a.model === 'exact-VERIFY' && o.cwd.endsWith('integration')) return {outcome: 'failed', summary: 'Same final acceptance fails', findings: []};
+      if (a.model === 'exact-BUILD' && o.cwd.endsWith('integration')) writeFileSync(join(o.cwd, 'repair.txt'), 'attempt ' + ++repairs);
+      return f.client.run(a, p, o);
+    }}});
+    const run = await engine.run(f.run.id);
+    assert.equal(run.status, 'needs_decision'); assert.equal(run.failures.count, 3); assert.equal(repairs, 2);
+  } finally {await f.dispose();}
+});
+
 test('three identical failed code repairs stop without starting dependent work', async () => {
   const f = await fixture();
   try {
     f.engine.approve(f.run.id, f.run.planHash);
     let attempts = 0;
-    const engine = new Engine(f.store, {github: f.github, client: {async run(a, p, o) {
-      if (a.model === 'exact-BUILD') {attempts++; writeFileSync(join(o.cwd, 'broken'), 'failed fixture');}
+    const engine = new Engine(f.store, {testRemote: f.remote, github: f.github, client: {...f.client, async run(a, p, o) {
+      if (a.model === 'exact-BUILD') {
+        attempts++; writeFileSync(join(o.cwd, 'broken'), 'failed fixture attempt ' + attempts);
+        // Stop the old implementation after proving that a new commit resets its counter.
+        if (attempts > 4) return {outcome: 'blocked', summary: 'Fixture loop guard', findings: []};
+      }
       return f.client.run(a, p, o);
     }}});
     const result = await engine.run(f.run.id);

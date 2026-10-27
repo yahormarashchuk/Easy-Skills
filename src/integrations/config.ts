@@ -13,6 +13,12 @@ export function configProposal(path: string, value: unknown) {
 /** Caller reviews the complete before/after proposal and explicitly approves its hash. */
 export async function applyConfig(path: string, value: unknown, expectedHash: string, probe: Command, cwd: string) {
   const proposal = configProposal(path, value);
+  return applyProposal(proposal, expectedHash, async () => {
+    const result = await execute(probe, {cwd, timeoutMs: 30_000});
+    if (result.code !== 0) throw new Error('Command check failed');
+  }).then(result => ({...result, verified: false, commandSucceeded: true}));
+}
+export async function applyProposal(proposal: ReturnType<typeof configProposal>, expectedHash: string, verify: () => Promise<void>) {
   if (proposal.hash !== expectedHash) throw new Error('Configuration changed since review');
   mkdirSync(dirname(proposal.path), {recursive: true});
   realpathSync(dirname(proposal.path));
@@ -21,8 +27,7 @@ export async function applyConfig(path: string, value: unknown, expectedHash: st
   const temp = proposal.path + '.easy-skills-' + randomUUID();
   writeFileSync(temp, proposal.after, {flag: 'wx', mode: 0o600}); renameSync(temp, proposal.path);
   try {
-    const result = await execute(probe, {cwd, timeoutMs: 30_000});
-    if (result.code !== 0) throw new Error('Connection check failed');
+    await verify();
   } catch (error) {
     if (readFileSync(proposal.path, 'utf8') === proposal.after) {
       if (proposal.before !== undefined) writeFileSync(proposal.path, proposal.before, {mode: 0o600});

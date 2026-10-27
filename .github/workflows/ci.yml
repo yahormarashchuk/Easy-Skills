@@ -5,6 +5,9 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+env:
+  EASY_SKILLS_ALLOW_CLIENT_PROBES: '0'
+  EASY_SKILLS_ALLOW_EXTERNAL: '0'
 jobs:
   test:
     strategy:

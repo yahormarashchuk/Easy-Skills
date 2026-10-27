@@ -1,6 +1,8 @@
 import { randomInt } from 'node:crypto';
 import type { Run } from '../contracts.js';
-import { Store } from '../persistence/store.js';
+import { Store, ResourceBusy } from '../persistence/store.js';
+import { ClientError, classify } from '../adapters/index.js';
+import { hash, message, redact } from '../util.js';
 import { Gh, type GitHub } from '../github/index.js';
 import { Engine } from './engine.js';
 import { mailTransport, settings } from '../notifications/index.js';
@@ -43,37 +45,87 @@ export async function requestMergeDecision(store: Store, run: Run): Promise<stri
   const id = store.createDecision(run, run.finalReviewHead, 'final-merge', code);
   // The code is never added to agent context, state events, notification outbox, or CLI output.
   await mailTransport(smtp).sendMail({from: {name: 'Easy Skills', address: smtp.from}, to: smtp.to,
-    subject: `[Easy Skills][${run.plan.project.name}][${run.plan.title}] Decision required`,
-    text: `Review ${run.finalPr?.url}\n\nTo authorize this exact revision within 15 minutes, post this command to the parent Issue:\n\n/easy-skills confirm ${run.id} ${run.planHash} ${id} ${run.finalReviewHead} ${code}\n\nSingle-use request; do not share the code with an agent.`});
+    subject: redact(`[Easy Skills][${run.plan.project.name}][${run.plan.title}] Decision required`).replace(/[\r\n]/g, ' '),
+    text: redact(`Review ${run.finalPr?.url}\n\nTo authorize this exact revision within 15 minutes, post this command to the parent Issue:\n\n/easy-skills confirm ${run.id} ${run.planHash} ${id} ${run.finalReviewHead} ${code}\n\nSingle-use request; do not share the code with an agent.`)});
   return id;
 }
 export async function pollRemote(store: Store, run: Run, engine: Engine, github?: GitHub): Promise<void> {
   const config = settings(store).remote;
   if (!config || !run.parentIssue) return;
+  let owner: string;
+  try {owner = store.acquire('remote:' + run.id);} catch (e) {if (e instanceof ResourceBusy) return; throw e;}
+  try {
   const gh = github || new Gh(run.plan.project.repository, run.root);
-  for (const comment of await gh.comments(run.parentIssue)) {
+  const cursorKey = `${run.id}:remote-cursor`;
+  let retry = false, newest = 0;
+  for (const comment of await gh.comments(run.parentIssue, store.operation<string>(cursorKey))) {
+    if (comment.updatedAt && Number.isFinite(Date.parse(comment.updatedAt))) newest = Math.max(newest, Date.parse(comment.updatedAt));
     const key = `${run.id}:remote:${comment.id}`;
-    if (store.operation(key)) continue;
+    const prior = store.operation<RemoteOperation>(key);
+    if (prior?.state === 'succeeded' || prior?.state === 'rejected') continue;
     const command = parseCommand(comment.body);
     // Ordinary discussion is never executable input.
-    if (!command) continue;
-    store.recordOperation(key, run.id, 'remote.received', {received: true});
-    if (!config.allowedAuthors.includes(comment.author) || command.runId !== run.id || command.planHash !== run.planHash) {
-      store.event(run.id, 'remote.rejected', {comment: comment.id}); continue;
+    if (!command) {
+      if (/^\s*\/easy-skills\b/.test(comment.body) && config.allowedAuthors.includes(comment.author)) {
+        await gh.commentOnce(run.parentIssue, key + ':syntax', 'Unsupported Easy Skills command syntax. Use ASCII quotes and copy the complete command including run ID and plan hash.');
+        store.recordOperation(key, run.id, 'remote.rejected', {state: 'rejected', binding: hash({body: comment.body, author: comment.author}), attempts: 0, reason: 'Malformed command'});
+      }
+      continue;
+    }
+    const binding = hash({body: comment.body, author: comment.author});
+    const operation: RemoteOperation = prior || {state: 'received', binding, attempts: 0};
+    const save = (state: RemoteOperation['state'], reason?: string) => {
+      Object.assign(operation, {state, reason});
+      store.recordOperation(key, run.id, 'remote.' + state, operation);
+      store.event(run.id, 'remote.' + state, {comment: comment.id, action: command.action, reason});
+    };
+    if (!prior) save('received');
+    const current = store.get(run.id);
+    if (operation.binding !== binding || !config.allowedAuthors.includes(comment.author) || command.runId !== run.id || command.planHash !== current.planHash) {
+      save('rejected', 'Author, command binding or approved plan changed'); continue;
     }
     try {
+      if (command.action === 'confirm') {
+        if (current.finalReviewHead !== command.head || !['ready', 'merged'].includes(current.status)) throw new Error('Stale merge revision or readiness');
+        store.transaction(() => {
+          store.consumeDecision(command.request, current, command.head, 'final-merge', command.code, key);
+          save('validated');
+        });
+        operation.attempts++; save('executing');
+        if (current.status !== 'merged') await engine.confirmFinalMerge(run.id, command.head);
+        save('succeeded');
+        continue;
+      }
+      // Local effects and their completion marker commit together. Network I/O stays outside transactions.
+      if (command.action === 'status') {
+        save('validated'); operation.attempts++; save('executing');
+        await gh.commentOnce(run.parentIssue, key + ':status', `Easy Skills state: ${current.status}; plan ${run.planHash}.`);
+        save('succeeded'); continue;
+      }
+      store.transaction(() => {
+      save('validated'); operation.attempts++; save('executing');
       if (command.action === 'pause' || command.action === 'stop') engine.requestControl(run.id, command.action);
       else if (command.action === 'resume') {
         // Resume cannot approve a draft, replace its model, or expand permissions.
-        if (!['paused', 'waiting_quota', 'needs_decision'].includes(store.get(run.id).status)) throw new Error('Run is not resumable');
+        if (!['approved', 'running', 'paused', 'waiting_quota', 'waiting_external', 'waiting_resource', 'needs_decision', 'ready'].includes(store.get(run.id).status)) throw new Error('Run is not resumable');
         store.recordOperation(`${run.id}:resume-request`, run.id, 'remote.resume', {resume: true});
       } else if (command.action === 'answer') {
         answerDecision(store, run.id, command.request, command.answer);
-      } else if (command.action === 'confirm') {
-        store.consumeDecision(command.request, store.get(run.id), command.head, 'final-merge', command.code);
-        await engine.confirmFinalMerge(run.id, command.head);
-      } else await gh.commentOnce(run.parentIssue, key + ':status', `Easy Skills state: ${store.get(run.id).status}; plan ${run.planHash}.`);
-      store.event(run.id, 'remote.applied', {comment: comment.id, action: command.action});
-    } catch {store.event(run.id, 'remote.rejected', {comment: comment.id, action: command.action});}
+      }
+      save('succeeded');
+      });
+    } catch (error) {
+      const transient = error instanceof ResourceBusy || (error instanceof ClientError && ['quota', 'network', 'waiting_ci', 'waiting_merge'].includes(error.kind)) || ['quota', 'network'].includes(classify(message(error)));
+      if (transient) retry = true;
+      save(transient ? 'transient_failed' : 'rejected', redact(message(error)));
+    }
   }
+  // Do not advance past a transient command; it must be fetched again after recovery.
+  if (!retry && newest) store.recordOperation(cursorKey, run.id, 'remote.cursor', new Date(newest - 1000).toISOString());
+  } finally {store.release('remote:' + run.id, owner);}
+}
+
+interface RemoteOperation {
+  state: 'received' | 'validated' | 'executing' | 'succeeded' | 'transient_failed' | 'rejected';
+  binding: string; attempts: number; reason?: string;
 }

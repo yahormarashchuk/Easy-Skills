@@ -21,8 +21,11 @@ Post one exact command as the entire comment on the feature's parent Issue:
 /easy-skills answer RUN_UUID PLAN_SHA256 REQUEST_UUID "Answer as a JSON string"
 ```
 
-The author must be allowlisted, run and plan must match, and every comment ID is
-consumed once. Other prose is never executed. Pause and stop apply at safe checkpoints,
+The author must be allowlisted and run/plan must match. Each comment is a stable
+operation with received/validated/executing/succeeded/transient_failed/rejected states.
+A read comment is not considered completed: transient failures and interrupted actions
+retry or reconcile, while succeeded/rejected operations are not applied again. Other
+prose is never executed. Pause and stop apply at safe checkpoints,
 not in the middle of file edits. Resume preserves the previously approved scope.
 
 When a stage returns a blocking question, its request appears on the parent Issue and
@@ -37,6 +40,18 @@ The human posts it on the parent Issue after reviewing the PR. Only the code has
 stored. The worker validates the current commit/base/evidence before attempting merge.
 Alternatively, `easy-skills merge RUN_UUID --head REVIEWED_COMMIT` is an explicit local
 decision. Neither path bypasses CI or GitHub branch protections.
+
+Accepting the code saves intent for that exact comment/run/plan/head in the same
+transaction as consumption. Network requests run outside the transaction. A transient
+failure after acceptance does not require another code for that operation, even if
+the original code expires during recovery. Another comment cannot reuse it. A changed
+plan/head/readiness invalidates the intent. Accepted/enqueued GitHub merge requests
+are persisted and reconciled until actual merge; they are not treated as success.
+
+Outbox workers claim rows atomically with leases and retry times. Expired claims can
+be recovered. One failing delivery does not prevent other messages from being tried.
+After reboot, `start RUN_UUID` can restart monitoring even in ready state. Main-branch
+movement revokes readiness and triggers sync/checks/review before a new confirmation.
 
 Because automation can use the same GitHub identity as the human, checking author
 names alone is insufficient for expanding permissions. This extra code is a workflow

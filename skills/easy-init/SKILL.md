@@ -3,7 +3,16 @@ name: easy-init
 description: Inspect an existing project and interview its owner to establish Easy Skills rules and context.
 ---
 
+For normal terminal onboarding, run `easy-skills init`. It discovers maintained examples,
+uses the selected DEFINE model to investigate unresolved questions, and asks the owner
+to approve readable rules and commands. Do not make the owner prepare configuration or
+copy digests. It preserves instructions and sends no GitHub mutations. New task plans
+carry local approved context without requiring a setup PR merge.
+
+The following procedure remains available for advanced, skill-led onboarding.
 Read [the workflow contract](references/workflow.md). Start with `easy-skills inspect`.
+Use [the interview procedure](references/interview.md) to maintain unresolved decisions,
+investigate repository facts, resolve contradictions and avoid repeated questions.
 Study existing instructions, manifests, tests and maintained examples without editing
 application code. Existing violations do not establish approved patterns.
 
@@ -19,3 +28,12 @@ AGENTS.md and CLAUDE.md and use short pointers to one shared rules directory.
 The generated rules are interview drafts. Replace unresolved text with agreed allowed,
 forbidden and approval-required behavior. Create layer files only for actual layers.
 Record decisions and a current project map. Do not require Docker, WSL or API keys.
+Complete `.easy-skills/decisions/onboarding.json`, preview `agree-rules --file FILE`,
+and apply the exact reviewed hash. Generated drafts never establish agreement. Show
+the agreement version/hash for the feature plan. Rules changes need a new agreement.
+
+Use project contract v2. Agree setup commands, their resource locks and protected
+verification entry points/configuration. Empty setup is an explicit choice. For an
+existing project, preview/apply `project-config --file FILE` and renew rules agreement.
+Prepare these files during the interview; the user reviews decisions and hashes.
+Do not make the user repair contradictory internal configuration by hand.
