@@ -8,6 +8,7 @@ import { execute, terminateTree } from '../../src/process.js';
 import { alive, rulesHash } from '../../src/util.js';
 import { fixture } from '../helpers.js';
 import { setTimeout as delay } from 'node:timers/promises';
+import { protectedManifest } from '../../src/runner/protected-inputs.js';
 
 test('CLI onboarding previews changes and preserves existing instructions; a detached worker survives its launching CLI', async () => {
   const f = await fixture();
@@ -30,7 +31,7 @@ test('CLI onboarding previews changes and preserves existing instructions; a det
     writeFileSync(interviewFile, JSON.stringify({...draft, status: 'agreed', decisions: draft.decisions.map((d: any) => ({...d, status: 'resolved', answer: 'Reviewed by fixture owner'}))}));
     const agreement = await cli(['agree-rules', '--file', interviewFile]);
     await cli(['agree-rules', '--file', interviewFile, '--apply-hash', agreement.hash]);
-    const plan = {...f.run.plan, featureId: 'cli-feature', rulesHash: rulesHash(f.root), rulesAgreement: requireAgreement(f.root)};
+    const plan = {...f.run.plan, featureId: 'cli-feature', protectedInputs: protectedManifest(f.root, f.run.plan.project), rulesHash: rulesHash(f.root), rulesAgreement: requireAgreement(f.root)};
     const file = join(f.dir, 'execution.yaml'); writeFileSync(file, stringify(plan));
     const drafted = await cli(['feature', 'draft', '--file', file]);
     assert.equal(drafted.status, 'draft');
@@ -64,5 +65,15 @@ test('resume of an already monitored ready feature does not leave a deferred exe
       {cwd: process.cwd(), env: {...process.env, EASY_SKILLS_HOME: f.store.home}, timeoutMs: 20_000});
     assert.equal(result.code, 0, result.stderr); assert.equal(JSON.parse(result.stdout).attached, true);
     assert.equal(f.store.operation(`${run.id}:resume-request`), undefined);
+  } finally {f.store.release(key, owner); await f.dispose();}
+});
+
+for (const status of ['approved', 'running'] as const) test(`R9: CLI resume accepts ${status} without duplicating an attached executor`, async () => {
+  const f = await fixture(), key = 'worker:' + f.run.id, owner = f.store.acquire(key);
+  try {
+    const run = f.engine.approve(f.run.id, f.run.planHash); run.status = status; f.store.save(run, 'fixture.crash-state');
+    const result = await execute({command: process.execPath, args: ['--import', 'tsx', resolve('src/cli/index.ts'), '--project', f.root, 'resume', run.id]},
+      {cwd: process.cwd(), env: {EASY_SKILLS_HOME: f.store.home}, timeoutMs: 20000});
+    assert.equal(result.code, 0, result.stderr); assert.equal(JSON.parse(result.stdout).attached, true);
   } finally {f.store.release(key, owner); await f.dispose();}
 });

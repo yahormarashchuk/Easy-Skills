@@ -9,6 +9,9 @@ Install the compiled package from the
 
 That asset contains the original alpha. The reliability changes in this checkout
 are unreleased; build a current tarball below to test the updated commands.
+The current alpha.2 policy refuses real Claude launches pending managed-hook isolation.
+Codex requires verified empty MCP grants and a fresh authorized model probe. See the
+[migration and implementation record](../reliability-implementation.md).
 
 ```sh
 npm install -g https://github.com/yahormarashchuk/Easy-Skills/releases/download/v0.1.0-alpha.1/easy-skills-0.1.0-alpha.1.tgz
@@ -22,7 +25,7 @@ and install from a source checkout instead:
 npm ci
 npm run build
 npm pack
-npm install -g ./easy-skills-0.1.0-alpha.1.tgz
+npm install -g ./easy-skills-0.1.0-alpha.2.tgz
 easy-skills doctor
 ```
 
@@ -48,7 +51,10 @@ installation target, review, and apply its hash. State and project context are r
 Upgrades must not replace a package while its workers are active. Keep the pinned
 tarball for recovery, compare package/skill changes, pause work at a safe point, back up
 the private state, install the reviewed version, and leave user modifications intact.
-Rollback uses the previous tarball and skill backups. Schema v1 to v2 migration is
-automatic with a pre-migration database backup. Existing plans keep their hashes;
-legacy agreement/merge-policy gaps require a new reviewed plan. Multi-version worker
+Rollback uses the previous tarball and skill backups. Schema v1/v2 to v3 migration
+backs up the database and preserves existing plan hashes and pending operations.
+Old binaries reject schema v3; do not point them at the upgraded database. Restoring
+an older backup requires reconciling external operations that happened since it.
+Legacy plans remain readable but require a separately reviewed v2 replacement for
+current execution. Multi-version worker
 installation and an automatic rollback manager are not implemented in this alpha.

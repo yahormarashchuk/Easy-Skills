@@ -24,3 +24,8 @@ layer rule names to those areas. Show `project.mergePolicy` and any approved VER
 diagnostics/browser tools; never infer permission to bypass server requirements.
 Implementation and Issue publication wait until the user approves the exact plan hash. Future final
 main-branch merge requires a separate revision-bound decision.
+
+The approval also includes setup, protected verification inputs and the total completed
+repair limit. Diagnose capability isolation before execution. Claude real launches and
+Codex named MCP grants currently stop with a prerequisite diagnostic; explain the limit
+and preserve the user's assignment. No automatic replacement is authorized.

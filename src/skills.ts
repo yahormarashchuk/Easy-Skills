@@ -7,6 +7,7 @@ export function skillResources(skill: string): Record<string, string> {
   }
   if (skill === 'easy-init') shared['references/project.yaml'] = 'templates/project.yaml';
   if (skill === 'easy-plan') {
+    shared['references/plan-stage.md'] = 'skills/_shared/plan-stage.md';
     shared['references/feature-request.yaml'] = 'templates/feature-request.yaml';
     shared['references/feature.yaml'] = 'templates/feature.yaml';
     shared['references/plan.schema.json'] = 'schemas/plan.schema.json';

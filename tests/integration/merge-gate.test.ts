@@ -58,3 +58,16 @@ test('retry after a lost asynchronous response reconciles an existing 409 operat
   const result = await gh.merge(1, 'head', {base: 'base', policy});
   assert.equal(result.state, 'pending'); assert.equal(result.operationId, 'existing-operation');
 });
+
+for (const outcome of ['failed', 'expired'] as const) test(`merge monitoring handles ${outcome} without a second submission`, async () => {
+  const gh = new Server(), api = gh.api.bind(gh);
+  gh.api = async <T>(path: string, method?: string, body?: any): Promise<T> => {
+    if (path.includes('/merge-async/')) {
+      if (outcome === 'expired') throw new GitHubHttpError(404, {message: 'Request expired'});
+      return {status: 'failed', details: {message: 'Rejected'}} as T;
+    }
+    return api<T>(path, method, body);
+  };
+  await assert.rejects(gh.merge(1, 'head', {base: 'base', policy, operationId: 'previous'}), outcome === 'failed' ? /merge failed/ : /404/);
+  assert.equal(gh.writes.length, 0);
+});

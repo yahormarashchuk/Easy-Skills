@@ -41,6 +41,24 @@ for (const provider of ['codex', 'claude-code'] as const) test(`${provider} laun
 test('Claude VERIFY enables approved diagnostics and browser tools without edit tools', () => {
   const command = invocation({provider: 'claude-code', model: 'fixture'}, undefined, 'read', undefined,
     {capabilities: {diagnostics: ['node check.mjs'], browserTools: ['mcp__browser__snapshot']}});
-  const tools = command.args[command.args.indexOf('--allowedTools') + 1]!;
+  const tools = command.args.slice(command.args.indexOf('--allowedTools') + 1).join(' ');
   assert.match(tools, /Bash\(node check.mjs\)/); assert.match(tools, /mcp__browser__snapshot/); assert.doesNotMatch(tools, /Edit|Write/);
+});
+
+test('Codex accepts a completed retried turn while terminal/protocol failures remain fatal', async () => {
+  for (const kind of ['transient', 'terminal', 'corrupt'] as const) {
+    const client = new CliClient(async (command, options) => {
+      options.onLine?.(kind === 'corrupt' ? '{broken' : JSON.stringify({type: kind === 'terminal' ? 'turn.failed' : 'error', error: {code: 'ECONNRESET', message: 'Connection interrupted'}}));
+      writeFileSync(command.args[command.args.indexOf('--output-last-message') + 1]!, JSON.stringify({outcome: 'passed', summary: 'Completed authoritative turn', findings: []}));
+      options.onLine?.('{"type":"turn.completed"}');
+      return {code: 0, stdout: '', stderr: '', timedOut: false, truncated: false};
+    });
+    const call = client.run({provider: 'codex', model: 'fixture'}, 'fixture', {cwd: '.'});
+    if (kind === 'transient') assert.equal((await call).outcome, 'passed');
+    else await assert.rejects(call);
+  }
+  assert.equal(decode('codex', JSON.stringify({type: 'turn.failed', error: {status: 429, message: 'Provider wait'}})).kind, 'quota');
+  const args = invocation({provider: 'claude-code', model: 'fixture'}, undefined, 'read', undefined,
+    {capabilities: {diagnostics: ['"C:/Program Files (x86)/node.exe" "check \u2603.mjs"'], browserTools: []}}).args;
+  assert.ok(args.includes('Bash("C:/Program Files (x86)/node.exe" "check \u2603.mjs")'));
 });

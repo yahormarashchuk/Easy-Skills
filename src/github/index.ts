@@ -8,6 +8,9 @@ export interface MergeResult {state: 'merged' | 'pending' | 'enqueued'; operatio
 export class GitHubHttpError extends Error {
   constructor(readonly status: number, readonly body: any) {super(`GitHub HTTP ${status}: ${redact(body?.message || body?.details?.message || 'request failed')}`);}
 }
+export class MergeTerminalError extends Error {
+  constructor(readonly state: 'failed' | 'expired', detail: string) {super(detail);}
+}
 
 export interface GitHub {
   issue(key: string, title: string, body: string): Promise<number>;
@@ -15,26 +18,49 @@ export interface GitHub {
   viewPr(number: number): Promise<PullRequest>;
   merge(number: number, head: string, options?: MergeOptions): Promise<MergeResult>;
   setIssue(number: number, open: boolean, comment: string): Promise<void>;
-  comments(number: number): Promise<{id: number; author: string; body: string}[]>;
+  comments(number: number, since?: string): Promise<{id: number; author: string; body: string; updatedAt?: string}[]>;
   commentOnce(number: number, key: string, body: string): Promise<void>;
+  queueEntry?(number: number): Promise<boolean>;
+  observeMerge?(number: number, head: string, operationId: string): Promise<MergeResult>;
 }
 export class Gh implements GitHub {
-  constructor(readonly repository: string, readonly cwd: string) {}
+  constructor(readonly repository: string, readonly cwd: string, readonly runner = execute) {}
   async api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
-    const args = ['api', `repos/${this.repository}/${path}`, '--method', method, '-H', 'X-GitHub-Api-Version: 2026-03-10'];
+    const args = ['api', '--hostname', 'github.com', `repos/${this.repository}/${path}`, '--method', method, '-H', 'X-GitHub-Api-Version: 2026-03-10'];
     if (body !== undefined) args.push('--input', '-');
-    const result = await execute({command: 'gh', args}, {cwd: this.cwd, input: body === undefined ? undefined : JSON.stringify(body), timeoutMs: 120_000});
+    return this.request<T>(args, body);
+  }
+  private async request<T>(args: string[], body?: unknown): Promise<T> {
+    const result = await this.runner({command: 'gh', args}, {cwd: this.cwd, role: 'github', input: body === undefined ? undefined : JSON.stringify(body), timeoutMs: 120_000});
     if (result.truncated) throw new Error('GitHub response exceeded capture limit; refusing incomplete data');
+    if (result.code === 4) throw new ClientError('auth', 'GitHub authentication required; run gh auth login');
     let value: any;
     try {value = result.stdout ? JSON.parse(result.stdout) : undefined;} catch {
       throw new Error('Invalid GitHub JSON response: ' + redact(result.stderr));
     }
     if (result.code !== 0) {
       const status = Number(result.stderr.match(/HTTP\s+(\d{3})|\((\d{3})\)/)?.slice(1).find(Boolean) || 0);
+      if (status === 403 && /^(?:API rate limit exceeded\b|You have exceeded a secondary rate limit\b)/i.test(value?.message || ''))
+        throw new ClientError('quota', 'GitHub rate limit exceeded');
+      if ([401, 403].includes(status)) throw new ClientError('auth', 'GitHub authentication or authorization required');
+      if (status === 429) throw new ClientError('quota', 'GitHub rate limit exceeded');
+      if ([500, 502, 503, 504].includes(status)) throw new ClientError('network', 'GitHub temporarily unavailable');
       if (status) throw new GitHubHttpError(status, value);
-      throw new ClientError('network', redact(result.stderr || 'GitHub transport failed'));
+      if (/ECONNRESET|ETIMEDOUT|ENOTFOUND|connection refused|unable to connect/i.test(result.stderr)) throw new ClientError('network', redact(result.stderr));
+      throw new ClientError('protocol', redact(result.stderr || 'GitHub transport failed without a structured status'));
     }
     return value as T;
+  }
+  async queueEntry(number: number): Promise<boolean> {
+    const [owner, name] = this.repository.split('/');
+    const result = await this.request<any>(['api', '--hostname', 'github.com', 'graphql', '--input', '-'], {
+      query: 'query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){mergeQueueEntry{id}}}}',
+      variables: {owner, name, number}});
+    if (result.errors || !result.data?.repository?.pullRequest) throw new Error('Cannot establish merge queue membership');
+    const entry = result.data.repository.pullRequest.mergeQueueEntry;
+    if (entry === null) return false;
+    if (!entry || typeof entry.id !== 'string') throw new Error('Incomplete merge queue membership response');
+    return true;
   }
   async issue(key: string, title: string, body: string): Promise<number> {
     const marker = `<!-- easy-skills:${key} -->`;
@@ -44,7 +70,7 @@ export class Gh implements GitHub {
       if (match) return match.number;
       if (issues.length < 100) break;
     }
-    const issue = await this.api<{number: number}>('issues', 'POST', {title, body: `${body}\n\n${marker}`});
+    const issue = await this.api<{number: number}>('issues', 'POST', {title: redact(title), body: `${redact(body)}\n\n${marker}`});
     return issue.number;
   }
   private fromApi(pr: any): PullRequest {
@@ -60,11 +86,22 @@ export class Gh implements GitHub {
       if (match) return this.fromApi(match);
       if (prs.length < 100) break;
     }
-    return this.fromApi(await this.api('pulls', 'POST', {title, body: `${body}\n\n${marker}`, head, base, draft: false}));
+    return this.fromApi(await this.api('pulls', 'POST', {title: redact(title), body: `${redact(body)}\n\n${marker}`, head, base, draft: false}));
   }
   async viewPr(number: number) {return this.fromApi(await this.api(`pulls/${number}`));}
+  async observeMerge(number: number, head: string, operationId: string): Promise<MergeResult> {
+    const pr = await this.viewPr(number);
+    if (pr.headRefOid !== head) throw new Error('PR head changed after review');
+    if (pr.state === 'MERGED' && pr.mergedAt) return {state: 'merged', operationId};
+    let observed: any;
+    try {observed = await this.api<any>(`pulls/${number}/merge-async/${encodeURIComponent(operationId)}`);}
+    catch (error) {if (error instanceof GitHubHttpError && error.status === 404) throw new MergeTerminalError('expired', 'GitHub merge request expired (HTTP 404)'); throw error;}
+    if (!['merged', 'pending', 'enqueued'].includes(observed.status)) throw new MergeTerminalError('failed', 'GitHub merge failed: ' + (observed.details?.message || observed.status));
+    return {state: observed.status, operationId};
+  }
   async merge(number: number, head: string, options?: MergeOptions): Promise<MergeResult> {
     if (!options?.policy) throw new Error('No agreed GitHub merge policy; review project.mergePolicy in a new approved plan');
+    if (options.operationId) return this.observeMerge(number, head, options.operationId);
     const pr = await this.viewPr(number);
     if (pr.headRefOid !== head) throw new Error('PR head changed after review');
     if (pr.state === 'MERGED' && pr.mergedAt) return {state: 'merged'};
@@ -93,7 +130,7 @@ export class Gh implements GitHub {
       const matches = runs.check_runs.filter(c => c.name === check.name && (!check.appId || c.app?.id === check.appId));
       const legacy = check.appId ? undefined : statuses.find(c => c.context === check.name);
       if (!matches.length && !legacy) throw new Error('Required GitHub check missing: ' + check.name);
-      if (matches.some(c => c.status !== 'completed') || legacy?.state === 'pending') throw new ClientError('network', 'Required GitHub check pending: ' + check.name);
+      if (matches.some(c => c.status !== 'completed') || legacy?.state === 'pending') throw new ClientError('waiting_ci', 'Required GitHub check pending: ' + check.name);
       if (matches.some(c => c.conclusion !== 'success') || (legacy && legacy.state !== 'success')) throw new Error('Required GitHub check failed: ' + check.name);
     }
     const path = `pulls/${number}/merge-async`;
@@ -106,24 +143,25 @@ export class Gh implements GitHub {
             existing.details.merge_action !== (policy.mode === 'queue' ? 'merge_queue' : 'direct_merge')) throw new Error('Existing GitHub merge request does not match the approved intent');
           return existing;
         });
-    if (!['merged', 'pending', 'enqueued'].includes(result.status)) throw new Error('GitHub merge failed: ' + (result.details?.message || result.status));
+    if (result.status === 'failed') throw new MergeTerminalError('failed', 'GitHub merge failed: ' + (result.details?.message || result.status));
+    if (!['merged', 'pending', 'enqueued'].includes(result.status)) throw new Error('Unknown GitHub merge response: ' + result.status);
     return {state: result.status, operationId: result.details?.uuid};
   }
   async setIssue(number: number, open: boolean, comment: string) {
     await this.commentOnce(number, `${open ? 'reopen' : 'close'}-${Buffer.from(comment).toString('base64url')}`, comment);
     await this.api(`issues/${number}`, 'PATCH', {state: open ? 'open' : 'closed'});
   }
-  async comments(number: number): Promise<{id: number; author: string; body: string}[]> {
-    const all: {id: number; author: string; body: string}[] = [];
+  async comments(number: number, since?: string): Promise<{id: number; author: string; body: string; updatedAt?: string}[]> {
+    const all: {id: number; author: string; body: string; updatedAt?: string}[] = [];
     for (let page = 1; ; page++) {
-      const batch = await this.api<{id: number; body: string; user: {login: string}}[]>(`issues/${number}/comments?per_page=100&page=${page}`);
-      all.push(...batch.map(c => ({id: c.id, author: c.user.login, body: c.body})));
+      const batch = await this.api<{id: number; body: string; updated_at: string; user: {login: string}}[]>(`issues/${number}/comments?per_page=100&page=${page}${since ? '&since=' + encodeURIComponent(since) : ''}`);
+      all.push(...batch.map(c => ({id: c.id, author: c.user.login, body: c.body, updatedAt: c.updated_at})));
       if (batch.length < 100) return all;
     }
   }
   async commentOnce(number: number, key: string, body: string) {
     const marker = `<!-- easy-skills:${key} -->`;
     if ((await this.comments(number)).some(c => c.body.includes(marker))) return;
-    await this.api(`issues/${number}/comments`, 'POST', {body: `${body}\n\n${marker}`});
+    await this.api(`issues/${number}/comments`, 'POST', {body: `${redact(body)}\n\n${marker}`});
   }
 }

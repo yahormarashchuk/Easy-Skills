@@ -31,10 +31,18 @@ completion or silently change policy.
 
 Final authorization is separately bound to run, plan and head. A remotely accepted
 single-use code is retained as operation-specific intent after transient failures.
-It cannot authorize another comment, plan or revision. Ready monitoring invalidates
-evidence when the source/target moves and repeats sync/review before another final
-confirmation. After submitting a queue request, GitHub owns its scheduling: inspect
+It cannot authorize another comment, plan or revision. Without an in-flight request,
+ready monitoring invalidates current readiness when source/target moves and repeats
+sync/review before another final confirmation. During an in-flight request, movement
+instead stops new sync/submission and preserves its original head and evidence while
+monitoring the actual outcome. Historical merge recording works even after rules change.
+After submitting a queue request, GitHub owns its scheduling: inspect
 and remove an obsolete queue entry in GitHub before changing its authorization scope.
+
+Async observation and queue membership checks are read operations. A failed/expired
+request or a removed queue entry needs a fresh reviewed `retry-merge` proposal; an
+ambiguous submission without a known request ID needs external reconciliation first.
+The runner does not make another PUT just to discover whether an earlier PUT happened.
 
 Official sources checked 2026-10-21:
 

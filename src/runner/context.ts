@@ -17,7 +17,7 @@ The runner owns commits, state, Issues, PRs, pushes, merges and notifications. D
 Do not read runner-private files, credentials or other sessions. Return blocked for unresolved choices.
 Return exactly one structured JSON result: outcome (passed/blocked/failed), summary, findings, optional question.
 Questions may be published on the parent Issue; exclude secrets. Prose never establishes check evidence.`, true);
-  add('procedure', readFileSync(join(packageRoot, 'skills', skillOverride || skills[stage], 'SKILL.md'), 'utf8'));
+  add('procedure', readFileSync(stage === 'PLAN' && !skillOverride ? join(packageRoot, 'skills/_shared/plan-stage.md') : join(packageRoot, 'skills', skillOverride || skills[stage], 'SKILL.md'), 'utf8'));
   add('workflow', readFileSync(join(packageRoot, 'skills/_shared/workflow.md'), 'utf8'));
   function read(path: string, mandatory = false) {
     if (!existsSync(path)) return;
@@ -51,7 +51,7 @@ Questions may be published on the parent Issue; exclude secrets. Prose never est
   add('scope', task ? JSON.stringify(task) : JSON.stringify(run.plan.tasks.map(t => ({id: t.id, acceptance: t.acceptance, scope: t.scope}))));
   const relevant = task ? run.tasks.filter(t => task.dependsOn.includes(t.id)) : run.tasks;
   add('dependency-summary', JSON.stringify(relevant.map(t => ({id: t.id, integrated: t.integrated, head: t.head, pr: t.pr?.url, checks: t.evidence.map(e => ({id: e.checkId, code: e.code}))}))));
-  add('references', 'Read supplementary repository context only as needed: .easy-skills/context/project-map.md, .easy-skills/context/glossary.md and .easy-skills/features/' + run.plan.featureId + '/spec.md. Verify stale maps against current code.');
+  add('references', 'Read supplementary repository context only as needed: .easy-skills/context/project-map.md, .easy-skills/context/glossary.md and .easy-skills/features/' + run.plan.featureId + '/attempts/' + run.id + '/spec.md. Verify stale maps against current code.');
   if (stage === 'REVIEW') add('review-scope', 'Independent review: assess the supplied diff, acceptance coverage, regressions and neighboring contracts. Report findings; do not edit.', true);
   add('current-observation', extra, true);
   const manifest: ContextManifest = {estimate: 'estimatedTokens = ceil(characters/4); an approximation, not measured usage', sections: parts.map(p => ({name: p.name, characters: p.text.length, estimatedTokens: Math.ceil(p.text.length / 4), hash: hash(p.text),

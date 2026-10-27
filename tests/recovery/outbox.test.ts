@@ -5,6 +5,21 @@ import { join } from 'node:path';
 import { fixture } from '../helpers.js';
 import { flushNotifications } from '../../src/notifications/index.js';
 
+test('notification subjects, redaction and retry visibility are preserved at the SMTP boundary', async () => {
+  const f = await fixture(), mails: any[] = [];
+  try {
+    writeFileSync(join(f.store.home, 'settings.json'), JSON.stringify({smtp: {host: 'fixture.invalid', port: 25, secure: false, from: 'from@example.invalid', to: 'to@example.invalid'}}));
+    for (const state of ['needs_decision', 'waiting_quota', 'ready']) f.store.enqueue(state, {runId: f.run.id, project: 'fixture', feature: 'notification', state, reason: 'password=synthetic'});
+    await flushNotifications(f.store, {transport: {async sendMail(mail) {mails.push(mail);}}});
+    assert.deepEqual(mails.map(mail => mail.subject.split('] ').at(-1)), ['Decision required', 'Waiting for quota recovery', 'Ready for final verification']);
+    assert.ok(mails.every(mail => !mail.text.includes('synthetic')));
+    f.store.enqueue('failed-delivery', {runId: f.run.id, project: 'fixture', feature: 'notification', state: 'ready'});
+    await flushNotifications(f.store, {transport: {async sendMail() {throw new Error('password=synthetic');}}});
+    assert.deepEqual(f.store.notificationSummary(f.run.id), {pending: 1, retrying: 1});
+    assert.ok(f.store.events('notifications').some(event => event.type === 'notification.failed' && !String(event.data).includes('synthetic')));
+  } finally {await f.dispose();}
+});
+
 test('outbox claims prevent concurrent delivery and one failed message does not block others', async () => {
   const f = await fixture();
   try {

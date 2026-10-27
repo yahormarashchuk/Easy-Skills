@@ -24,7 +24,7 @@ test('BUILD receives cleaned check failure details instead of a private log refe
   try {
     f.engine.approve(f.run.id, f.run.planHash);
     let builds = 0;
-    const engine = new Engine(f.store, {github: f.github, client: {...f.client, async run(a, p, o) {
+    const engine = new Engine(f.store, {testRemote: f.remote, github: f.github, client: {...f.client, async run(a, p, o) {
       if (a.model === 'exact-BUILD') {
         if (++builds === 1) writeFileSync(join(o.cwd, 'broken'), 'break acceptance');
         else {repairs = p; return {outcome: 'blocked', summary: 'Fixture inspected repair bundle', findings: []};}

@@ -1,3 +1,5 @@
+import which from 'which';
+import { protectedManifest } from '../src/runner/protected-inputs.js';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,10 +14,10 @@ import type { Client } from '../src/adapters/index.js';
 import { stringify } from 'yaml';
 import { agreementProposal, applyAgreement, draftInterview, requireAgreement } from '../src/runner/onboarding.js';
 
-export async function fixture(stack = 'node') {
+export async function fixture(stack = 'node', options: {setup?: import('../src/contracts.js').Check[]; checkSource?: string} = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'easy skills test ')), root = join(dir, 'project with spaces'), remote = join(dir, 'remote.git');
   mkdirSync(root); mkdirSync(remote);
-  const git = new Git(root);
+  const git = new Git(root, undefined, {repository: 'test/example', testRemote: remote});
   await checked('git', ['init', '--bare', '--initial-branch=trunk', remote], dir);
   await git.run(['init', '--initial-branch=trunk']);
   for (const path of [root, remote]) {
@@ -25,7 +27,7 @@ export async function fixture(stack = 'node') {
   writeFileSync(join(root, 'AGENTS.md'), 'Use focused tests.\n');
   writeFileSync(join(root, '.gitignore'), 'node_modules/\n__pycache__/\n');
   writeFileSync(join(root, stack === 'node' ? 'package.json' : 'pyproject.toml'), stack === 'node' ? '{"name":"example","private":true}' : '[project]\nname="example"\nversion="0.1.0"\n');
-  writeFileSync(join(root, 'check.mjs'), 'import fs from "node:fs"; if (fs.existsSync("broken")) process.exit(1);\n');
+  writeFileSync(join(root, 'check.mjs'), options.checkSource || 'import fs from "node:fs"; if (fs.existsSync("broken")) process.exit(1);\n');
   if (stack === 'python') writeFileSync(join(root, 'check.py'), 'from pathlib import Path\nassert not Path("broken").exists()\n');
   await git.run(['add', '.']); await git.run(['commit', '-m', 'initial']);
   await git.run(['remote', 'add', 'origin', 'https://github.com/test/example.git']);
@@ -33,9 +35,9 @@ export async function fixture(stack = 'node') {
   await git.run(['push', '-u', 'origin', 'trunk']);
   const store = new Store(join(dir, 'private state'));
   const assignments = Object.fromEntries(['DEFINE', 'PLAN', 'BUILD', 'VERIFY', 'REVIEW', 'SHIP'].map(stage => [stage, {provider: stage === 'REVIEW' ? 'claude-code' : 'codex', model: 'exact-' + stage}]));
-  const plan = Plan.parse({schemaVersion: 1, featureId: 'sample', title: 'Sample feature', spec: 'Deliver two independent, tested behaviors.',
-    project: {schemaVersion: 1, name: 'Example', repository: 'test/example', mainBranch: 'trunk', githubTransport: 'gh', mergePolicy: {mode: 'strict', requiredChecks: [{name: 'fixture-ci'}]},
-      checks: [{id: 'acceptance', command: stack === 'python' ? (process.platform === 'win32' ? 'python' : 'python3') : process.execPath,
+  const plan = Plan.parse({schemaVersion: 2, repairPolicy: {maxCompletedAttempts: 3}, protectedInputs: {}, featureId: 'sample', title: 'Sample feature', spec: 'Deliver two independent, tested behaviors.',
+    project: {schemaVersion: 2, name: 'Example', repository: 'test/example', mainBranch: 'trunk', githubTransport: 'gh', mergePolicy: {mode: 'strict', requiredChecks: [{name: 'fixture-ci'}]},
+      setup: options.setup || [], checks: [{id: 'acceptance', command: stack === 'python' ? which.sync(process.platform === 'win32' ? 'python' : 'python3') : process.execPath,
         args: [stack === 'python' ? 'check.py' : 'check.mjs']}]}, assignments,
     tasks: [{id: 'one', title: 'First', description: 'First behavior', acceptance: ['First behavior works']},
       {id: 'two', title: 'Second', description: 'Second behavior', dependsOn: ['one'], acceptance: ['Both behaviors work']}],
@@ -47,6 +49,7 @@ export async function fixture(stack = 'node') {
   applyAgreement(root, interview, agreementProposal(root, interview).hash);
   plan.rulesAgreement = requireAgreement(root);
   await git.run(['add', '.']); await git.run(['commit', '-m', 'Agree fixture rules']); await git.push('trunk', root);
+  plan.protectedInputs = protectedManifest(root, plan.project);
   const identity = await git.identity(), run = store.create(identity.root, identity.commonDir, plan);
   for (const a of Object.values(plan.assignments)) store.recordProbe(a, 'fixture-1', '/fixture/client');
   const github = new FakeGitHub(remote);
@@ -57,7 +60,7 @@ export async function fixture(stack = 'node') {
     if (assignment.model === 'exact-BUILD') writeFileSync(join(options.cwd, options.cwd.endsWith('one') ? 'one.txt' : 'two.txt'), 'tested behavior\n');
     return {outcome: 'passed', summary: 'Verified fixture result', findings: []};
   }};
-  const engine = new Engine(store, {client, github});
+  const engine = new Engine(store, {client, github, testRemote: remote});
   return {dir, root, remote, git, store, run, engine, github, client, calls,
     async dispose() {
       store.close();

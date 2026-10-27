@@ -1,5 +1,9 @@
 # Validation scenarios
 
+See the current [alpha.2 implementation ledger](reliability-implementation.md), including
+the Claude isolation refusal and explicit migration/approval changes. Historical
+tool-free probes are not acceptance of the current execution policy.
+
 Public CI and `npm test` use local repositories, protocol fixtures and injected
 GitHub/SMTP/CLI executors. They require no authenticated sessions. Run `npm run check`
 before tests: it checks test/script types as well as production sources.

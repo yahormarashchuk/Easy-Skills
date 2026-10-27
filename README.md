@@ -9,20 +9,26 @@ changes described here are unreleased. The published `v0.1.0-alpha.1` asset pred
 them; use a tarball built from this checkout to try the current implementation.
 See [implementation status](docs/implementation-status.md).
 
+The `0.1.0-alpha.2` working tree uses project/plan v2 and SQLite v3. Real Claude
+launches currently fail closed because managed hook exclusion cannot be verified
+before execution. Codex supports verified empty MCP grants; named grants stop.
+No model/provider fallback occurs. See the [implementation and migration record](docs/reliability-implementation.md).
+
 ## Install the packaged product
 
 Install Node.js 24+, Git, GitHub CLI and the official AI clients you intend to use.
 Install a compiled Easy Skills tarball; package users do not compile TypeScript:
 
 ```powershell
-npm install -g .\easy-skills-0.1.0-alpha.1.tgz
+npm install -g .\easy-skills-0.1.0-alpha.2.tgz
 easy-skills --version
 easy-skills bootstrap --client codex
 ```
 
 Bootstrap checks prerequisites and authentication without model requests and previews
 skill installation. Review its full proposal, then repeat with `--apply-hash HASH`.
-Use `--client claude-code` for Claude skills. Existing skills get backups; modified
+Claude skills can be installed, but current real execution remains blocked by the
+isolation diagnostic. Existing skills get backups; modified
 files are retained by conservative uninstall. [Installation and removal](docs/installation/README.md)
 
 The previous compiled release and checksums are available on
@@ -35,7 +41,8 @@ There is no npm registry publication or new GitHub release for these local chang
 2. In the managed repository, invoke `easy-init`. It inspects current code and keeps
    an unresolved decision tree rather than repeating questions already answered.
 3. Prepare [project.yaml](templates/project.yaml), including real checks and an agreed
-   GitHub merge policy. `easy-skills init --config FILE` previews the context files;
+   GitHub merge policy, approved setup and protected verification inputs.
+   `easy-skills init --config FILE` previews the context files;
    repeat with `--apply-hash HASH` after review. Generated rules remain drafts.
 4. Resolve rule conflicts, assumptions and required check prerequisites. Complete
    `.easy-skills/decisions/onboarding.json` with explicit answers and `status: agreed`.
@@ -44,7 +51,8 @@ There is no npm registry publication or new GitHub release for these local chang
    a feature. Rule changes require a new agreement and plan.
    Commit the reviewed project context before creating feature worktrees.
 5. Approve two small requests for each exact CLI/model configuration, then run
-   `easy-skills doctor --provider codex --model EXACT_ID --probe` (or `claude-code`).
+   `easy-skills doctor --provider codex --model EXACT_ID --probe` after its isolation
+   diagnostic succeeds. Claude probes currently stop before a model request.
    This uses account quota and verifies launch plus exact-session continuation.
 
 Automatic merge requires agreed GitHub checks plus server-enforced freshness: strict
@@ -72,7 +80,8 @@ easy-skills status RUN_ID
 
 Review the complete plan before approval: specification, task scopes/dependencies,
 rules agreement, models, checks, VERIFY capabilities, publication and intermediate
-merge permissions. The runner captures a baseline before BUILD. Existing failures
+merge permissions, setup, protected inputs and the completed repair limit. The runner
+prepares each worktree and captures a baseline before BUILD. Existing failures
 or unavailable checks stop implementation for a decision; they never count as passing
 feature evidence.
 
@@ -91,15 +100,23 @@ block worktree deletion; branches and data volumes are retained.
 ## Recovery and diagnostics
 
 `status RUN_ID` and `events RUN_ID` show persisted state. `pause`, `resume`, `sync` and
-`stop` operate at safe checkpoints. After reboot, run `start RUN_ID` again, including
+`stop` operate at safe checkpoints. After reboot, use `resume RUN_ID` or `start RUN_ID`, including
 for a ready feature. Startup-at-login is not installed automatically.
 
 Quota/network waits preserve the exact session and assignment. A compatibility probe
 does not expire merely because 24 hours passed: the worker compares CLI path/version
-and checks authentication again. A changed client requires a reviewed probe; expired
+and the adapter execution policy, and checks authentication again. A changed client or
+execution policy requires a reviewed probe; expired
 authentication requires official login. Unknown quota reset times use capped backoff.
 Three unresolved occurrences of the same normalized failure stop repairs even when
 each attempt makes a new commit. A new revision alone is not progress.
+New plans also approve an overall repair limit (three completed corrective BUILD
+attempts by default). Quota/network interruptions retain the same repair ID and
+session. Legacy approvals are never silently assigned this new condition.
+
+`baseline --recapture`, `setup-reset`, `retry-merge` and `project-config` use concrete
+preview/apply hashes. `abandon` preserves a failed run and frees its feature ID for
+a fresh, separately approved attempt. See the [updated journey](docs/reliability-implementation.md#user-journey).
 
 Ready-state monitoring detects main changes, revokes readiness and repeats sync,
 checks and review. Old merge confirmations cannot authorize a different head. A live

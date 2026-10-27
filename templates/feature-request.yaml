@@ -12,3 +12,6 @@ assignments:
 permissions:
   publishIssues: true
   mergeIntermediate: true
+
+repairPolicy: {maxCompletedAttempts: 3}
+verification: {diagnostics: [], browserTools: []}

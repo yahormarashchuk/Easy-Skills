@@ -30,17 +30,23 @@ from an arbitrary program does not verify a server. Stdio and streamable HTTP ar
 supported through the official MCP SDK. Bearer tokens can be referenced by environment
 name for Codex; OAuth setup stays in the official client. No model OAuth tokens are read.
 
-For VERIFY, add exact tool names such as `mcp__browser__snapshot` to
-`verification.browserTools` in the plan. Claude loads a project `.mcp.json` with strict
-MCP configuration and a short-lived stdio tool filter that rejects unapproved tool
-calls. It is not a listening server or a required background service. Codex loads
-native configuration and sets `enabled_tools` for approved servers. Inline nested
-TOML server options currently stop with a diagnostic; use environment references or
-review a supported configuration. Other client/plugin/managed MCP behavior needs
-validation in that installation; a failed launch must not be treated as verified.
+Current alpha.2 execution supports **empty Codex MCP grants only**. Before launch,
+the adapter reads the effective server list with configuration-only commands, supplies
+complete inert disabled server definitions and checks the effective list again.
+It also verifies disabled hooks/apps. A remaining enabled server, unsupported identity
+or failed configuration load refuses the launch. `mcp_servers={}` alone does not clear
+all layers and is not used. No server is started by these checks. Named grants stop
+with an unsupported-capability diagnostic.
 
-Claude VERIFY exposes Read/Glob/Grep, only approved diagnostic commands through Bash,
-and approved MCP tools. It does not expose Edit/Write. Deterministic checks still run
+Claude's project `.mcp.json` proxy filters remain covered by local MCP fixtures, but
+real Claude launches currently stop: safe-mode preserves managed hooks, whose exclusion
+cannot be established before execution. A strict MCP file alone does not solve that
+separate problem. No user/project/plugin/managed isolation claim is inferred from
+an argument string or a successful configuration write.
+
+The fixture-tested Claude VERIFY invocation exposes Read/Glob/Grep, approved diagnostic
+commands through Bash, and approved MCP tools, with no Edit/Write. Actual command
+matching still needs authorized client validation. Deterministic checks run
 independently under the runner; agent observations do not replace their evidence.
 
 Sources: [Codex MCP configuration](https://developers.openai.com/codex/mcp),

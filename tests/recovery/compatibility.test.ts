@@ -7,7 +7,7 @@ for (const change of ['auth', 'version', 'path']) test(`compatibility stops befo
   const f = await fixture();
   try {
     f.engine.approve(f.run.id, f.run.planHash);
-    const engine = new Engine(f.store, {github: f.github, client: {...f.client, async diagnose() {
+    const engine = new Engine(f.store, {testRemote: f.remote, github: f.github, client: {...f.client, async diagnose() {
       return {installed: true, authenticated: change !== 'auth', version: change === 'version' ? 'fixture-2' : 'fixture-1', executable: change === 'path' ? '/other/client' : '/fixture/client'};
     }}});
     const run = await engine.run(f.run.id);

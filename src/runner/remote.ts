@@ -45,8 +45,8 @@ export async function requestMergeDecision(store: Store, run: Run): Promise<stri
   const id = store.createDecision(run, run.finalReviewHead, 'final-merge', code);
   // The code is never added to agent context, state events, notification outbox, or CLI output.
   await mailTransport(smtp).sendMail({from: {name: 'Easy Skills', address: smtp.from}, to: smtp.to,
-    subject: `[Easy Skills][${run.plan.project.name}][${run.plan.title}] Decision required`,
-    text: `Review ${run.finalPr?.url}\n\nTo authorize this exact revision within 15 minutes, post this command to the parent Issue:\n\n/easy-skills confirm ${run.id} ${run.planHash} ${id} ${run.finalReviewHead} ${code}\n\nSingle-use request; do not share the code with an agent.`});
+    subject: redact(`[Easy Skills][${run.plan.project.name}][${run.plan.title}] Decision required`).replace(/[\r\n]/g, ' '),
+    text: redact(`Review ${run.finalPr?.url}\n\nTo authorize this exact revision within 15 minutes, post this command to the parent Issue:\n\n/easy-skills confirm ${run.id} ${run.planHash} ${id} ${run.finalReviewHead} ${code}\n\nSingle-use request; do not share the code with an agent.`)});
   return id;
 }
 export async function pollRemote(store: Store, run: Run, engine: Engine, github?: GitHub): Promise<void> {
@@ -56,13 +56,22 @@ export async function pollRemote(store: Store, run: Run, engine: Engine, github?
   try {owner = store.acquire('remote:' + run.id);} catch (e) {if (e instanceof ResourceBusy) return; throw e;}
   try {
   const gh = github || new Gh(run.plan.project.repository, run.root);
-  for (const comment of await gh.comments(run.parentIssue)) {
+  const cursorKey = `${run.id}:remote-cursor`;
+  let retry = false, newest = 0;
+  for (const comment of await gh.comments(run.parentIssue, store.operation<string>(cursorKey))) {
+    if (comment.updatedAt && Number.isFinite(Date.parse(comment.updatedAt))) newest = Math.max(newest, Date.parse(comment.updatedAt));
     const key = `${run.id}:remote:${comment.id}`;
     const prior = store.operation<RemoteOperation>(key);
     if (prior?.state === 'succeeded' || prior?.state === 'rejected') continue;
     const command = parseCommand(comment.body);
     // Ordinary discussion is never executable input.
-    if (!command) continue;
+    if (!command) {
+      if (/^\s*\/easy-skills\b/.test(comment.body) && config.allowedAuthors.includes(comment.author)) {
+        await gh.commentOnce(run.parentIssue, key + ':syntax', 'Unsupported Easy Skills command syntax. Use ASCII quotes and copy the complete command including run ID and plan hash.');
+        store.recordOperation(key, run.id, 'remote.rejected', {state: 'rejected', binding: hash({body: comment.body, author: comment.author}), attempts: 0, reason: 'Malformed command'});
+      }
+      continue;
+    }
     const binding = hash({body: comment.body, author: comment.author});
     const operation: RemoteOperation = prior || {state: 'received', binding, attempts: 0};
     const save = (state: RemoteOperation['state'], reason?: string) => {
@@ -98,7 +107,7 @@ export async function pollRemote(store: Store, run: Run, engine: Engine, github?
       if (command.action === 'pause' || command.action === 'stop') engine.requestControl(run.id, command.action);
       else if (command.action === 'resume') {
         // Resume cannot approve a draft, replace its model, or expand permissions.
-        if (!['paused', 'waiting_quota', 'needs_decision'].includes(store.get(run.id).status)) throw new Error('Run is not resumable');
+        if (!['approved', 'running', 'paused', 'waiting_quota', 'waiting_external', 'waiting_resource', 'needs_decision', 'ready'].includes(store.get(run.id).status)) throw new Error('Run is not resumable');
         store.recordOperation(`${run.id}:resume-request`, run.id, 'remote.resume', {resume: true});
       } else if (command.action === 'answer') {
         answerDecision(store, run.id, command.request, command.answer);
@@ -106,10 +115,13 @@ export async function pollRemote(store: Store, run: Run, engine: Engine, github?
       save('succeeded');
       });
     } catch (error) {
-      const transient = error instanceof ResourceBusy || (error instanceof ClientError && ['quota', 'network'].includes(error.kind)) || ['quota', 'network'].includes(classify(message(error)));
+      const transient = error instanceof ResourceBusy || (error instanceof ClientError && ['quota', 'network', 'waiting_ci', 'waiting_merge'].includes(error.kind)) || ['quota', 'network'].includes(classify(message(error)));
+      if (transient) retry = true;
       save(transient ? 'transient_failed' : 'rejected', redact(message(error)));
     }
   }
+  // Do not advance past a transient command; it must be fetched again after recovery.
+  if (!retry && newest) store.recordOperation(cursorKey, run.id, 'remote.cursor', new Date(newest - 1000).toISOString());
   } finally {store.release('remote:' + run.id, owner);}
 }
 

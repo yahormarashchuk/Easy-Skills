@@ -22,6 +22,11 @@ test('PLAN uses the selected model read-only and cannot expand agreed permission
     await assert.rejects(generatePlan(f.store, f.root, request, {...f.client, async run() {
       return {outcome: 'passed', summary: 'Unsafe draft', findings: [], plan: {...f.run.plan, permissions: {publishIssues: false, mergeIntermediate: true}}};
     }}), /changed an agreed field: permissions/);
+    for (const requested of [undefined, {diagnostics: [], browserTools: []}]) {
+      await assert.rejects(generatePlan(f.store, f.root, {...request, verification: requested}, {...f.client, async run() {
+        return {outcome: 'passed', summary: 'Expanded grant', findings: [], plan: {...f.run.plan, verification: {diagnostics: [], browserTools: ['mcp__github__merge_pull_request']}}};
+      }}), /changed an agreed field: verification/);
+    }
     assert.equal(f.github.objects.size, 0);
   } finally {await f.dispose();}
 });

@@ -14,12 +14,13 @@ test('sync preserves a blocked conflict and resumes only its recorded merge with
     writeFileSync(join(f.root, 'shared.txt'), 'base\n');
     await f.git.commit(f.root, 'shared base'); await f.git.push('trunk', f.root);
     const path = join(f.store.home, 'worktrees', run.id, 'integration');
+    f.store.recordOperation(`${run.id}:worktree:integration`, run.id, 'worktree.intent', {path, branch: run.branch});
     run.worktree = await f.git.worktree(run.branch, 'trunk', path);
     f.store.save(run, 'test.integration');
     writeFileSync(join(run.worktree, 'shared.txt'), 'feature behavior\n'); await f.git.commit(run.worktree, 'feature');
     writeFileSync(join(f.root, 'shared.txt'), 'access control\n'); await f.git.commit(f.root, 'main changed'); await f.git.push('trunk', f.root);
     let calls = 0, answerSeen = false;
-    const engine = new Engine(f.store, {github: f.github, client: {...f.client, async run(a, prompt, options) {
+    const engine = new Engine(f.store, {testRemote: f.remote, github: f.github, client: {...f.client, async run(a, prompt, options) {
       calls++; options.onSession?.('conflict-session');
       if (calls === 1) return {outcome: 'blocked', summary: 'Need intended contract', question: 'Preserve both behaviors?', findings: []};
       answerSeen = prompt.includes('Keep both');

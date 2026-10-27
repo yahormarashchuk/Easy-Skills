@@ -1,21 +1,22 @@
 import crossSpawn from 'cross-spawn';
 import { createWriteStream } from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
-import which from 'which';
-import { resolve as absolute } from 'node:path';
-import { redact } from './util.js';
+import { join } from 'node:path';
+import { redact, stateHome } from './util.js';
+import { childEnvironment, projectExecutable, trustedExecutable, type ProcessRole } from './execution.js';
 
 export interface Command { command: string; args: string[] }
 export interface ProcessOptions {
   cwd: string; input?: string; timeoutMs?: number; signal?: AbortSignal;
   onSpawn?: (pid: number) => void; onLine?: (line: string) => void; log?: string;
   env?: NodeJS.ProcessEnv;
+  role?: ProcessRole;
 }
 export interface ProcessResult {code: number; stdout: string; stderr: string; timedOut: boolean; truncated: boolean}
 export function terminateTree(pid: number): Promise<void> {
   return new Promise(resolve => {
     if (process.platform === 'win32') {
-      const child = crossSpawn('taskkill.exe', ['/PID', String(pid), '/T', '/F'], {stdio: 'ignore', windowsHide: true});
+      const child = crossSpawn(trustedExecutable('taskkill.exe', process.cwd()), ['/PID', String(pid), '/T', '/F'], {stdio: 'ignore', windowsHide: true, env: childEnvironment('tool')});
       child.on('error', () => resolve()); child.on('close', () => resolve());
     } else {
       try {process.kill(-pid, 'SIGTERM');} catch {try {process.kill(pid, 'SIGTERM');} catch { /* already exited */ }}
@@ -28,10 +29,11 @@ export function terminateTree(pid: number): Promise<void> {
 export function execute(spec: Command, options: ProcessOptions): Promise<ProcessResult> {
   return new Promise((resolve, reject) => {
     if (options.signal?.aborted) {reject(new Error('Execution aborted')); return;}
-    let command = spec.command;
+    const role = options.role || (/^(git|gh|codex|claude|taskkill\.exe|docker)$/i.test(spec.command) ? ({git: 'git', gh: 'github', codex: 'client', claude: 'client'}[spec.command] as ProcessRole || 'tool') : 'project');
+    const env = childEnvironment(role, process.env, options.env);
+    let command = role === 'project' || role === 'mcp' ? projectExecutable(spec.command, options.cwd, env) : trustedExecutable(spec.command, options.cwd);
     if (process.platform === 'win32') {
-      const file = which.sync(absolute(options.cwd, spec.command), {nothrow: true}) ||
-        which.sync(spec.command, {nothrow: true, path: (options.env || process.env).PATH});
+      const file = command;
       // A .cmd script expands %* in a second cmd.exe parse. Generic batch scripts do
       // not provide a lossless argv boundary. Reject ambiguous text instead of letting
       // it become a second command; use an .exe or node <script> for these arguments.
@@ -44,9 +46,10 @@ export function execute(spec: Command, options: ProcessOptions): Promise<Process
     const log = options.log ? createWriteStream(options.log, {flags: 'a', mode: 0o600}) : undefined;
     let logError: Error | undefined;
     log?.on('error', e => {logError = e;});
-    const child = crossSpawn(command, spec.args, {
+    const args = role === 'git' ? ['-c', 'core.hooksPath=' + join(stateHome(), 'disabled-hooks'), '-c', 'core.fsmonitor=false', ...spec.args] : spec.args;
+    const child = crossSpawn(command, args, {
       cwd: options.cwd, shell: false, windowsHide: true, detached: process.platform !== 'win32',
-      stdio: ['pipe', 'pipe', 'pipe'], env: options.env || process.env,
+      stdio: ['pipe', 'pipe', 'pipe'], env,
     });
     let stdout = '', stderr = '', pending = '', timedOut = false, truncated = false, callbackError: unknown;
     const decoder = new StringDecoder('utf8');
@@ -85,9 +88,9 @@ export function execute(spec: Command, options: ProcessOptions): Promise<Process
     });
   });
 }
-export async function checked(command: string, args: string[], cwd: string, input?: string): Promise<string> {
+export async function checked(command: string, args: string[], cwd: string, input?: string, trim = true): Promise<string> {
   const result = await execute({command, args}, {cwd, input, timeoutMs: 120_000});
   if (result.code !== 0) throw new Error(redact(`${command} failed (${result.code}): ${result.stderr || result.stdout}`));
   if (result.truncated) throw new Error(`${command} output exceeded the capture limit; refusing to use incomplete output`);
-  return result.stdout.trim();
+  return trim ? result.stdout.trim() : result.stdout;
 }

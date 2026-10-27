@@ -6,6 +6,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 import type { Run, Plan } from '../contracts.js';
 import { VERSION, RunSchema } from '../contracts.js';
 import { alive, ensureDir, hash, now, stateHome } from '../util.js';
+import { processIdentity, ownerAlive } from '../process-identity.js';
+import { EXECUTION_POLICY } from '../execution.js';
 
 export class ResourceBusy extends Error {}
 
@@ -27,12 +29,12 @@ export class Store {
       CREATE TABLE IF NOT EXISTS probes (key TEXT PRIMARY KEY, checked_at TEXT NOT NULL, version TEXT NOT NULL);
     `);
     const schema = this.db.prepare('SELECT value FROM meta WHERE key=?').get('schema');
-    if (schema && !['1', '2'].includes(String(schema.value))) throw new Error('Unsupported database schema; use the matching runner version');
+    if (schema && !['1', '2', '3'].includes(String(schema.value))) throw new Error('Unsupported database schema; use the matching runner version');
     if (schema?.value === '1') this.db.prepare('VACUUM INTO ?').run(join(home, `runner-before-v2-${Date.now()}-${randomUUID()}.db`));
     if (!schema || schema.value === '1') this.transaction(() => {
       // Another process may have migrated after discovery but before BEGIN IMMEDIATE.
       const current = this.db.prepare('SELECT value FROM meta WHERE key=?').get('schema');
-      if (current?.value === '2') return;
+      if (current?.value === '2' || current?.value === '3') return;
       if (current && current.value !== '1') throw new Error('Database schema changed while opening; use the matching runner version');
       this.db.exec(`ALTER TABLE notifications ADD COLUMN lease_owner TEXT;
         ALTER TABLE notifications ADD COLUMN lease_until TEXT;
@@ -41,6 +43,14 @@ export class Store {
         ALTER TABLE probes ADD COLUMN executable TEXT;`);
       this.db.prepare('INSERT OR REPLACE INTO meta VALUES (?,?)').run('schema', '2');
     });
+    if (this.db.prepare('SELECT value FROM meta WHERE key=?').get('schema')?.value !== '3') {
+      this.db.prepare('VACUUM INTO ?').run(join(home, `runner-before-v3-${Date.now()}-${randomUUID()}.db`));
+      this.transaction(() => {
+        if (this.db.prepare('SELECT value FROM meta WHERE key=?').get('schema')?.value === '3') return;
+        this.db.exec('ALTER TABLE locks ADD COLUMN process_identity TEXT');
+        this.db.prepare('INSERT OR REPLACE INTO meta VALUES (?,?)').run('schema', '3');
+      });
+    }
   }
   close() {this.db.close();}
   transaction<T>(fn: () => T): T {
@@ -63,8 +73,9 @@ export class Store {
       finalPhase: 'SYNC', finalEvidence: [], finalSessions: {}, failures: {fingerprint: '', head: '', count: 0},
     };
     this.transaction(() => {
-      if (this.list().some(r => r.commonDir === commonDir && r.plan.featureId === plan.featureId && r.status !== 'merged'))
+      if (this.list().some(r => r.commonDir === commonDir && r.plan.featureId === plan.featureId && !['merged', 'abandoned'].includes(r.status)))
         throw new Error('An unfinished run already uses this feature ID');
+      if (this.list().some(r => r.commonDir === commonDir && r.plan.featureId === plan.featureId)) run.branch += '-' + run.id.slice(0, 8);
       this.db.prepare('INSERT INTO runs VALUES (?,?,?,?)').run(run.id, root, run.revision, JSON.stringify(run));
       this.event(run.id, 'draft.created', {planHash: run.planHash, version: VERSION});
     });
@@ -95,12 +106,12 @@ export class Store {
   acquire(key: string): string {
     const owner = randomUUID();
     this.transaction(() => {
-      if (key.startsWith('environment:') && this.list().some(run => run.activeResource === key.slice('environment:'.length) && alive(run.childPid)))
+      if (key.startsWith('environment:') && this.list().some(run => run.activeResource === key.slice('environment:'.length) && ownerAlive(run.childPid, run.childIdentity)))
         throw new ResourceBusy('Resource has a live recorded child: ' + key);
       const existing = this.db.prepare('SELECT * FROM locks WHERE key=?').get(key);
-      if (existing && alive(Number(existing.pid))) throw new ResourceBusy('Resource is in use: ' + key);
+      if (existing && ownerAlive(Number(existing.pid), existing.process_identity ? String(existing.process_identity) : undefined)) throw new ResourceBusy('Resource is in use: ' + key);
       this.db.prepare('DELETE FROM locks WHERE key=?').run(key);
-      this.db.prepare('INSERT INTO locks VALUES (?,?,?,?)').run(key, owner, process.pid, now());
+      this.db.prepare('INSERT INTO locks(key,owner,pid,acquired_at,process_identity) VALUES (?,?,?,?,?)').run(key, owner, process.pid, now(), processIdentity(process.pid) || null);
     });
     return owner;
   }
@@ -118,8 +129,8 @@ export class Store {
     try {return await operation();} finally {this.release(key, owner);}
   }
   locked(key: string): boolean {
-    const row = this.db.prepare('SELECT pid FROM locks WHERE key=?').get(key);
-    return !!row && alive(Number(row.pid));
+    const row = this.db.prepare('SELECT pid,process_identity FROM locks WHERE key=?').get(key);
+    return !!row && ownerAlive(Number(row.pid), row.process_identity ? String(row.process_identity) : undefined);
   }
   operation<T>(key: string): T | undefined {
     const row = this.db.prepare('SELECT data FROM operations WHERE key=?').get(key);
@@ -131,6 +142,13 @@ export class Store {
   }
   enqueue(key: string, payload: unknown) {this.db.prepare('INSERT OR IGNORE INTO notifications(key,payload) VALUES (?,?)').run(key, JSON.stringify(payload));}
   pendingNotifications() {return this.db.prepare('SELECT * FROM notifications WHERE sent_at IS NULL').all();}
+  notificationSummary(runId?: string) {
+    const rows = this.pendingNotifications().filter(row => {
+      if (!runId) return true;
+      try {return JSON.parse(String(row.payload)).runId === runId;} catch {return false;}
+    });
+    return {pending: rows.length, retrying: rows.filter(row => Number(row.attempts) > 0).length};
+  }
   markSent(key: string) {this.db.prepare('UPDATE notifications SET sent_at=?,attempts=attempts+1 WHERE key=?').run(now(), key);}
   markAttempt(key: string) {this.db.prepare('UPDATE notifications SET attempts=attempts+1 WHERE key=?').run(key);}
   claimNotification(owner: string, leaseMs = 120_000) {
@@ -151,7 +169,7 @@ export class Store {
     this.db.prepare('UPDATE notifications SET lease_owner=NULL,lease_until=NULL,retry_at=?,attempts=attempts+1 WHERE key=? AND lease_owner=?')
       .run(new Date(Date.now() + Math.min(60_000 * 2 ** Math.min(attempts, 8), 4 * 60 * 60_000)).toISOString(), key, owner);
   }
-  probeKey(assignment: unknown) {return hash(assignment);}
+  probeKey(assignment: unknown) {return hash({assignment, executionPolicy: EXECUTION_POLICY});}
   recordProbe(assignment: unknown, version: string, executable?: string) {
     this.db.prepare('INSERT INTO probes(key,checked_at,version,executable) VALUES (?,?,?,?) ON CONFLICT(key) DO UPDATE SET checked_at=excluded.checked_at,version=excluded.version,executable=excluded.executable')
       .run(this.probeKey(assignment), now(), version, executable || null);

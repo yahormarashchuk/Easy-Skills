@@ -18,10 +18,12 @@ resource locks serialize incompatible checks against shared environments. Reposi
 locks serialize fetch, push and worktree management across feature workers; Git's
 own ref guards remain in effect. Dead process
 locks can be replaced. A live recorded child blocks crash recovery even when its worker
-has died; PID reuse is deliberately treated conservatively, requiring human reconciliation.
+has died. OS birth identity distinguishes proven PID reuse; unknown live identity stays
+conservative and requires human reconciliation.
 
 States: draft → approved → running → ready → merged. Side exits are waiting_quota,
-needs_decision, paused and stopped. Cursor: BUILD → VERIFY → REVIEW → SHIP → INTEGRATE.
+waiting_external, waiting_resource, needs_decision, paused, stopped and abandoned.
+Cursor: BUILD → VERIFY → REVIEW → SHIP → INTEGRATE, with persisted REPAIR intents.
 The next task is selected only after dependency PRs are confirmed merged. Final work
 uses SYNC → VERIFY → REVIEW → SHIP. Main merge is separately authorized at an exact
 reviewed commit. Remote commands cannot approve drafts or change model assignments.
@@ -53,7 +55,7 @@ outside the managed repository. It holds runner.db, logs/, worktrees/ and settin
 Repository context remains under .easy-skills/. Credentials are never read from official
 CLI stores; mail passwords are read by environment-variable name.
 
-## Reliability additions (unreleased)
+## Earlier reliability additions (alpha.1 baseline)
 
 Database schema v2 migrates notification leases/retry times, operation-bound decisions
 and probe executable identities in one transaction, with a pre-migration database
@@ -98,3 +100,36 @@ run lock, refuses to edit alongside a live child, and revokes readiness after ba
 movement before automatic sync/reverification. GitHub async merge intents remain
 pending until actual merged state, never merely accepted/enqueued. See
 [merge gate](../merge-gate.md), [MCP](../mcp.md) and [validation](../validation.md).
+
+## Reliability contract v2 / database v3 (alpha.2, unreleased)
+
+See [the implementation ledger and migration record](../reliability-implementation.md).
+New plan approvals bind setup, protected verification controls and completed repair
+limits. Existing approved JSON/hashes are preserved; legacy execution stops for
+replacement approval. SQLite migration adds OS birth identity with a backup and
+transactional version recheck. Unknown live identities stay conservative.
+
+Trusted tool paths and role environments cover Git, gh, official clients, checks,
+MCP transports and termination. Effective origin fetch/push URLs are checked before
+external Git operations. Test remotes require explicit fixture injection. Known secrets
+are redacted at public boundaries; this cannot prove the absence of every secret.
+
+Guards check the actual owned worktree before/after mutation, before verification and
+commit/push. Protected file changes stop for a replacement approval. Review supplies
+complete bounded file diffs and persists head/base/file coverage. Binary/oversized
+inputs require a decision. The runner resends current context instead of relying on
+optional-session delta placeholders.
+
+Only typed code/check failures enter repair. The repair ID, failed stage, head, reasons,
+bundle and session precede corrective BUILD. Validated BUILD plus a successful runner
+commit completes an ID once; waits do not count. Commit intents recover commit-before-save
+interruptions. Refusals/blocked repairs stop for a decision.
+
+One network scheduler persists its deadline. Merge submission, async request, actual
+queue membership and PR outcome are distinct. Terminal/ambiguous requests never cause
+blind resubmission. Historical merged outcomes use saved authorization/evidence;
+new operations require current rules and exact revision approval.
+
+Real Claude execution is refused pending enforceable managed-hook isolation. Codex
+launches verify effective empty MCP grants and disabled hooks/apps. These controls
+do not establish absolute host isolation. Fresh real-provider acceptance is outstanding.

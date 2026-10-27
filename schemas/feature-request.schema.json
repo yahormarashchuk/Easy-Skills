@@ -181,6 +181,47 @@
         "mergeIntermediate"
       ],
       "additionalProperties": false
+    },
+    "verification": {
+      "type": "object",
+      "properties": {
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+          }
+        },
+        "browserTools": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^mcp__[\\w-]+__[\\w-]+$"
+          }
+        }
+      },
+      "required": [
+        "diagnostics",
+        "browserTools"
+      ],
+      "additionalProperties": false
+    },
+    "repairPolicy": {
+      "default": {
+        "maxCompletedAttempts": 3
+      },
+      "type": "object",
+      "properties": {
+        "maxCompletedAttempts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        }
+      },
+      "required": [
+        "maxCompletedAttempts"
+      ],
+      "additionalProperties": false
     }
   },
   "required": [
@@ -188,7 +229,8 @@
     "title",
     "spec",
     "assignments",
-    "permissions"
+    "permissions",
+    "repairPolicy"
   ],
   "additionalProperties": false
 }

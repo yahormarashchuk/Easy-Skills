@@ -13,6 +13,9 @@ test('schema v1 migration backs up and preserves an existing alpha run without c
   const f = await fixture(), home = mkdtempSync(join(tmpdir(), 'easy migration fixture '));
   try {
     const run = structuredClone(f.run);
+    run.plan.schemaVersion = 1; run.plan.project.schemaVersion = 1;
+    run.plan.runnerVersion = '0.1.0-alpha.1'; run.plan.skillsVersion = '0.1.0-alpha.1';
+    delete run.plan.repairPolicy; delete run.plan.protectedInputs; delete run.plan.project.setup;
     delete run.plan.rulesAgreement; delete run.plan.project.mergePolicy;
     run.planHash = hash(run.plan); run.approvedHash = run.planHash; run.status = 'approved';
     const old = new DatabaseSync(join(home, 'runner.db'));
@@ -27,11 +30,11 @@ test('schema v1 migration backs up and preserves an existing alpha run without c
     try {
       assert.equal(migrated.get(run.id).planHash, run.approvedHash);
       assert.deepEqual(migrated.get(run.id).plan, run.plan);
-      assert.equal(migrated.db.prepare("SELECT value FROM meta WHERE key='schema'").get()!.value, '2');
+      assert.equal(migrated.db.prepare("SELECT value FROM meta WHERE key='schema'").get()!.value, '3');
       assert.equal(readdirSync(home).filter(p => p.startsWith('runner-before-v2-')).length, 1);
       migrated.enqueue('migrated', {}); assert.ok(migrated.claimNotification('fixture'));
-      const restored = await new Engine(migrated, {client: f.client, github: f.github}).run(run.id);
-      assert.equal(restored.status, 'needs_decision'); assert.match(restored.reason!, /Legacy plan lacks a rules agreement/);
+      const restored = await new Engine(migrated, {testRemote: f.remote, client: f.client, github: f.github}).run(run.id);
+      assert.equal(restored.status, 'needs_decision'); assert.match(restored.reason!, /Legacy execution policy/);
     } finally {migrated.close();}
     const reopened = new Store(home); reopened.close();
     assert.equal(readdirSync(home).filter(p => p.startsWith('runner-before-v2-')).length, 1);
@@ -57,7 +60,7 @@ test('another worker completing migration after version discovery does not migra
   };
   try {
     const store = new Store(home);
-    assert.equal(store.db.prepare("SELECT value FROM meta WHERE key='schema'").get()!.value, '2');
+    assert.equal(store.db.prepare("SELECT value FROM meta WHERE key='schema'").get()!.value, '3');
   } finally {
     Store.prototype.transaction = original;
     constructing?.close(); rmSync(home, {recursive: true, force: true});

@@ -2,14 +2,15 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Engine } from '../../src/runner/engine.js';
 import { fixture } from '../helpers.js';
+import { ClientError } from '../../src/adapters/index.js';
 
 test('lost merge responses reconcile actual merged PRs without merging twice', async () => {
   const f = await fixture();
   try {
     f.engine.approve(f.run.id, f.run.planHash);
     const original = f.github.merge.bind(f.github); let once = true;
-    f.github.merge = async (...args) => {const result = await original(...args); if (once) {once = false; throw new Error('ECONNRESET after merge');} return result;};
-    assert.equal((await f.engine.run(f.run.id)).status, 'waiting_quota');
+    f.github.merge = async (...args) => {const result = await original(...args); if (once) {once = false; throw new ClientError('network', 'ECONNRESET after merge');} return result;};
+    assert.equal((await f.engine.run(f.run.id)).status, 'waiting_external');
     const ready = await f.engine.run(f.run.id);
     assert.equal(ready.status, 'ready', ready.reason || ''); assert.equal(f.github.merges.length, 2);
     once = true;
@@ -25,7 +26,7 @@ test('queued intermediate PR leaves its dependency pending and persists merge in
     f.engine.approve(f.run.id, f.run.planHash);
     f.github.merge = async () => ({state: 'enqueued'});
     const run = await f.engine.run(f.run.id);
-    assert.equal(run.status, 'waiting_quota');
+    assert.equal(run.status, 'waiting_external');
     assert.equal(run.tasks[0]!.integrated, false); assert.equal(run.tasks[1]!.worktree, undefined);
     const intent = f.store.operation<any>(`${run.id}:merge:${run.tasks[0]!.pr!.number}:${run.tasks[0]!.head}`);
     assert.equal(intent.state, 'enqueued');
@@ -67,7 +68,7 @@ test('two feature workers use independent worktrees and only satisfy their own d
     const otherPlan = {...f.run.plan, featureId: 'parallel', title: 'Parallel feature'};
     const second = f.store.create(f.run.root, f.run.commonDir, otherPlan);
     f.engine.approve(second.id, second.planHash);
-    const [one, two] = await Promise.all([f.engine.run(f.run.id), new Engine(f.store, {client: f.client, github: f.github}).run(second.id)]);
+    const [one, two] = await Promise.all([f.engine.run(f.run.id), new Engine(f.store, {testRemote: f.remote, client: f.client, github: f.github}).run(second.id)]);
     assert.equal(one.status, 'ready', one.reason || ''); assert.equal(two.status, 'ready', two.reason || '');
     assert.notEqual(one.worktree, two.worktree);
     for (const task of one.tasks) assert.ok(!two.tasks.some(t => t.worktree === task.worktree));

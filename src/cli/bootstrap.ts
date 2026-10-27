@@ -12,7 +12,7 @@ export async function bootstrap(cwd: string, provider: Provider, target: string,
     catch {checks.push({name, ok: false, detail: 'Executable not available'});}
   }
   const diagnostic = await dependencies.diagnose({provider, model: 'diagnostic-only'}, cwd);
-  checks.push({name: provider, ok: diagnostic.installed && diagnostic.authenticated, detail: diagnostic.version});
+  checks.push({name: provider, ok: diagnostic.installed && diagnostic.authenticated && diagnostic.isolation !== false, detail: diagnostic.detail || diagnostic.version});
   const installation = installSkills(target), ready = checks.every(c => c.ok);
   if (!('hash' in installation)) throw new Error('Expected a skill installation preview');
   const preview = {checks, ready, installation, hash: hash({checks, installationHash: installation.hash}), next: ready

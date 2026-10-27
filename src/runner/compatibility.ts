@@ -11,6 +11,7 @@ export async function requireCompatibility(store: Store, client: Client, assignm
   const diagnostic = await (client.diagnose ? client.diagnose(assignment, cwd) : new CliClient().diagnose(assignment, cwd));
   if (!diagnostic.installed) throw new ClientError('failure', `CLI installation unavailable: ${assignment.provider}`);
   if (!diagnostic.authenticated) throw new ClientError('auth', `Official CLI authentication expired or unavailable: ${assignment.provider}; sign in and resume`);
+  if (diagnostic.isolation === false) throw new ClientError('prerequisite', diagnostic.detail || 'Client capability isolation unavailable');
   if (!store.hasProbe(assignment, diagnostic)) throw new ClientError('failure', `CLI path/version compatibility changed for ${assignment.provider}/${assignment.model}; review and rerun doctor --probe with the same exact model`);
   return diagnostic;
 }

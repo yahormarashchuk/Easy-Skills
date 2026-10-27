@@ -47,7 +47,7 @@ test('quota wait preserves the exact session without consuming repair cycles', a
   try {
     f.engine.approve(f.run.id, f.run.planHash);
     let once = false, resumed: string | undefined;
-    const engine = new Engine(f.store, {github: f.github, client: {...f.client, async run(a, p, o) {
+    const engine = new Engine(f.store, {testRemote: f.remote, github: f.github, client: {...f.client, async run(a, p, o) {
       if (!once) {once = true; o.onSession?.('quota-session'); throw new ClientError('quota', 'usage limit reached');}
       if (a.model === 'exact-BUILD' && o.cwd.endsWith('one')) resumed = o.session;
       return f.client.run(a, p, o);

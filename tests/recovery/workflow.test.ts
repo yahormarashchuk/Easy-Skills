@@ -11,7 +11,7 @@ test('whole-feature repair stops after three unresolved failures despite new com
   const f = await fixture(); let repairs = 0;
   try {
     f.engine.approve(f.run.id, f.run.planHash);
-    const engine = new Engine(f.store, {github: f.github, client: {...f.client, async run(a, p, o) {
+    const engine = new Engine(f.store, {testRemote: f.remote, github: f.github, client: {...f.client, async run(a, p, o) {
       if (a.model === 'exact-VERIFY' && o.cwd.endsWith('integration')) return {outcome: 'failed', summary: 'Same final acceptance fails', findings: []};
       if (a.model === 'exact-BUILD' && o.cwd.endsWith('integration')) writeFileSync(join(o.cwd, 'repair.txt'), 'attempt ' + ++repairs);
       return f.client.run(a, p, o);
@@ -26,7 +26,7 @@ test('three identical failed code repairs stop without starting dependent work',
   try {
     f.engine.approve(f.run.id, f.run.planHash);
     let attempts = 0;
-    const engine = new Engine(f.store, {github: f.github, client: {...f.client, async run(a, p, o) {
+    const engine = new Engine(f.store, {testRemote: f.remote, github: f.github, client: {...f.client, async run(a, p, o) {
       if (a.model === 'exact-BUILD') {
         attempts++; writeFileSync(join(o.cwd, 'broken'), 'failed fixture attempt ' + attempts);
         // Stop the old implementation after proving that a new commit resets its counter.

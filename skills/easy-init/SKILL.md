@@ -24,3 +24,9 @@ Record decisions and a current project map. Do not require Docker, WSL or API ke
 Complete `.easy-skills/decisions/onboarding.json`, preview `agree-rules --file FILE`,
 and apply the exact reviewed hash. Generated drafts never establish agreement. Show
 the agreement version/hash for the feature plan. Rules changes need a new agreement.
+
+Use project contract v2. Agree setup commands, their resource locks and protected
+verification entry points/configuration. Empty setup is an explicit choice. For an
+existing project, preview/apply `project-config --file FILE` and renew rules agreement.
+Prepare these files during the interview; the user reviews decisions and hashes.
+Do not make the user repair contradictory internal configuration by hand.

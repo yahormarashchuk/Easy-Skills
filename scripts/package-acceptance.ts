@@ -12,7 +12,7 @@ const compiled = await import(pathToFileURL(join(packageRoot, 'dist/index.js')).
 const f = await fixture();
 const store = new compiled.Store(f.store.home);
 try {
-  const engine = new compiled.Engine(store, {client: f.client, github: f.github});
+  const engine = new compiled.Engine(store, {client: f.client, github: f.github, testRemote: f.remote});
   engine.approve(f.run.id, f.run.planHash);
   const ready = await engine.run(f.run.id);
   assert.equal(ready.status, 'ready', ready.reason || '');

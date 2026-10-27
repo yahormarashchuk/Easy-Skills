@@ -47,7 +47,22 @@ export function rulesHash(root: string): string {
     catch (e) {if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;}
   }
   walk('.easy-skills/rules');
-  return hash(entries);
+  // Include instructions and client controls that can affect any later worktree stage.
+  function instructions(dir: string) {
+    for (const entry of readdirSync(join(root, dir), {withFileTypes: true})) {
+      if (['.git', 'node_modules', '__pycache__', '.venv'].includes(entry.name)) continue;
+      const p = join(dir, entry.name), normalized = p.replaceAll('\\', '/');
+      if (entry.isSymbolicLink()) {
+        if (['AGENTS.md', 'CLAUDE.md', '.codex', '.claude', '.mcp.json'].includes(entry.name)) throw new Error('Symlink in protected instructions: ' + p);
+        continue;
+      }
+      if (entry.isDirectory()) instructions(p);
+      else if (['AGENTS.md', 'CLAUDE.md', '.mcp.json'].includes(entry.name) || /(?:^|\/)\.(?:codex|claude)\//.test(normalized))
+        entries[normalized] = readFileSync(join(root, p), 'utf8');
+    }
+  }
+  instructions('');
+  return hash(Object.fromEntries(Object.entries(entries).map(([path, text]) => [path, text.replaceAll('\r\n', '\n')])));
 }
 export function alive(pid?: number): boolean {
   if (!pid) return false;
@@ -55,6 +70,13 @@ export function alive(pid?: number): boolean {
 }
 export function message(error: unknown): string {return error instanceof Error ? error.message : String(error);}
 export function redact(input: string): string {
+  const path = join(stateHome(), 'settings.json');
+  let settings: any;
+  try {settings = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};}
+  catch {return '[REDACTED: local redaction settings could not be loaded]';}
+  const names = ['GH_TOKEN', 'GITHUB_TOKEN', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', settings.smtp?.passwordEnv,
+    ...Object.values(settings.execution?.environment || {}).flat()] as string[];
+  for (const name of names) if (name && process.env[name] && process.env[name]!.length >= 4) input = input.split(process.env[name]!).join('[REDACTED]');
   return input.replace(/\b(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{12,})\b/g, '[REDACTED]')
     .replace(/((?:authorization|password|api[_-]?key|access[_-]?token)\s*[:=]\s*)[^\s,;]+/gi, '$1[REDACTED]');
 }

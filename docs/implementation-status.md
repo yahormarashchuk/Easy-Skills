@@ -3,6 +3,13 @@
 This is an alpha implementation of the supplied [product specification](product-spec.md).
 Do not equate a built package or simulated acceptance run with release readiness.
 
+Current working version: **0.1.0-alpha.2**, project/plan contract v2, SQLite schema v3.
+See the [finding ledger, migration notes and current validation](reliability-implementation.md).
+Real Claude launches are deliberately refused pending enforceable managed-hook
+isolation. Codex supports verified empty MCP grants; named grants are unsupported.
+The table below describes the earlier alpha foundation; current limits in the ledger
+take precedence. No new live-provider or GitHub mutation acceptance is claimed.
+
 | Area | Implemented | Outstanding validation or scope |
 | --- | --- | --- |
 | Contracts/provenance | Strict project, model, plan, stage-result and run schemas; dependency validation; pinned source revisions and licenses | Schema v1 to v2 backup/migration and preserved-plan tests; future schema migrations need explicit coverage |
@@ -30,9 +37,9 @@ metacharacters are rejected rather than executed. Use a native executable, or
 `node path/to/script.js`, when a check needs literal quotes, percent signs or shell
 operators in its arguments. No arbitrary Issue text becomes a shell command.
 
-Cleanup also rejects ignored files (including generated dependency directories) to
-avoid deleting untracked private data hidden by .gitignore. Handle those files explicitly
-before applying a worktree cleanup plan; the alpha does not auto-classify ignored data.
+Cleanup rejects unknown ignored files to avoid deleting private data hidden by
+.gitignore. The optional `--setup-outputs` proposal includes only unchanged ignored
+files inventoried as outputs of the approved setup, under its exact apply hash.
 
 The v1 release gate remains the supplied full scenario: clean Windows installation,
 two real provider/model assignments across parallel features, terminal closure, quota
@@ -45,11 +52,12 @@ fixture tests, package installation and two-turn real launch/resume probes for C
 CLI 0.163.0 (`gpt-6.1-sol`) and Claude Code 2.1.306 (`claude-sonnet-5-5`). Those probes
 do not establish compatibility of the revised structured-output/MCP implementation.
 Current local verification and remaining limits are recorded in
-[the reliability audit](reliability-audit.md).
+[the implementation ledger](reliability-implementation.md).
 
 Hosted CI was rechecked read-only on 2026-10-22. Both `test (windows-latest, 24)` and
 `test (ubuntu-latest, 24)` passed at release commit
 `fda65ecaeed91b6d7c441345fdf5f1b743175c5c` in
 [run 39625039980](https://github.com/yahormarashchuk/Easy-Skills/actions/runs/39625039980).
-The old unregistered-workflow/404 condition is resolved. The current reliability
-branch remains local and has no hosted CI result of its own.
+The old unregistered-workflow/404 condition is resolved. Baseline `0899a37` was pushed
+before this implementation. The current alpha.2 edits are local and no hosted CI result
+for these edits has been checked.

@@ -1,5 +1,11 @@
 # Client compatibility
 
+**Alpha.2:** the adapter execution policy changed, so these historical model probes
+do not authorize current execution. Real Claude launches are refused because managed
+hook exclusion cannot be verified before execution. Codex's configuration-only empty
+MCP/hook restriction check passed locally on 2026-10-22; no revised model launch/resume
+probe was performed. See [the current implementation record](../reliability-implementation.md).
+
 Observed locally on 2026-10-21, Windows, Node.js 24.22.0, Git 2.45.1:
 
 | Client | Observation | Scope |
@@ -17,7 +23,7 @@ opt-in client check using `npm run smoke:clients -- codex EXACT_ID` or
 `claude-code EXACT_ID`. To allow a worker to use a configuration, use `easy-skills doctor
 --provider codex --model EXACT_ID --probe`, which performs a request and exact session
 resume and stores the exact assignment, executable path and version outside the repo.
-Execution compares that identity and checks authentication again, without expiring
+Execution compares that identity plus its execution-policy generation and checks authentication again, without expiring
 compatibility solely because a quota wait lasted more than 24 hours. Changed clients
 and older identity-less probes require a reviewed fresh probe. No default/alias mapping is
 maintained; availability is verified through the actual selected client's response.
@@ -35,10 +41,12 @@ can use plan-approved diagnostics/browser capabilities. See [MCP details](../mcp
 Claude invocations use a temporary per-invocation settings file to disable configured
 fallback chains and automatic content-based switching. Reported startup/assistant/result
 models are checked against the exact assigned ID; a mismatch stops the task. A managed
-policy or upstream client can still reject that configuration. This behavior follows
-[Claude's documented model configuration](https://code.claude.com/docs/en/model-config)
-and was exercised with authenticated Claude Code 2.1.306 and `claude-sonnet-5-5`.
-Other installed versions and model configurations need their own probe.
+policy or upstream client can still reject that configuration. The intended controls
+follow [Claude's documented model configuration](https://code.claude.com/docs/en/model-config).
+Model identity alone was checked in the original tool-free probe with Claude Code 2.1.306 and
+`claude-sonnet-5-5`. That observation does not validate the revised fallback, permission
+or hook configuration. Current real launch refusal takes precedence over the older
+usage examples. Other versions/configurations need their own authorized validation.
 
 These options follow [OpenAI non-interactive documentation](https://developers.openai.com/codex/noninteractive),
 the [Claude CLI reference](https://code.claude.com/docs/en/cli-reference), and

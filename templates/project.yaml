@@ -1,4 +1,4 @@
-schemaVersion: 1
+schemaVersion: 2
 name: Example project
 repository: owner/repository
 mainBranch: main
@@ -19,3 +19,8 @@ checks:
     timeoutMs: 300000
 # For a shared mutable database, add the same resource name to incompatible checks.
 # resource: shared-test-database
+
+# Explicitly approve dependency preparation before baseline checks.
+setup: []
+# Include verification entry points and significant configuration.
+protectedInputs: [package.json]
