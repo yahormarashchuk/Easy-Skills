@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { readCodexModels } from '../../src/adapters/model-catalog.js';
+import { readClaudeModels, readCodexModels } from '../../src/adapters/model-catalog.js';
 import { CliClient } from '../../src/adapters/index.js';
 
 async function withServer(mode: string, check: (command: {command: string; prefix: string[]}, root: string, log: string) => Promise<void>) {
@@ -58,11 +58,57 @@ for (const mode of ['error', 'malformed', 'oversize', 'empty', 'cursor', 'invali
   });
 });
 
-test('Claude catalog discovery stays fail-closed and injected protocol clients cannot launch a real catalog', async () => {
+test('injected protocol clients cannot launch a real catalog', async () => {
   let calls = 0;
   const client = new CliClient(async () => {calls++; throw new Error('Unexpected process');});
-  await assert.rejects(client.listModels('claude-code', '.'), /managed.*hook|hook exclusion/);
+  await assert.rejects(client.listModels('claude-code', '.'), /Injected clients/);
   await assert.rejects(client.listModels('codex', '.'), /Injected clients/);
   await assert.rejects(client.listProviders('.'), /Injected clients/);
   assert.equal(calls, 0);
+});
+
+async function withClaude(mode: string, check: (command: {command: string; prefix: string[]}, root: string, log: string) => Promise<void>) {
+  const root = mkdtempSync(join(tmpdir(), 'easy model catalog ')), log = join(root, 'requests.jsonl'), script = join(root, 'claude fixture.mjs');
+  writeFileSync(script, `import fs from 'node:fs'; import readline from 'node:readline';
+const mode=${JSON.stringify(mode)}, log=${JSON.stringify(log)};
+fs.writeFileSync(log, JSON.stringify({args:process.argv.slice(2)})+'\\n');
+const send=value=>process.stdout.write(JSON.stringify(value)+'\\n');
+readline.createInterface({input:process.stdin}).on('line', line=>{
+ const message=JSON.parse(line); fs.appendFileSync(log,JSON.stringify(message)+'\\n');
+ if(message.type!=='control_request') {process.exit(9); return;}
+ if(mode==='timeout') return;
+ if(mode==='error') {send({type:'control_response',response:{subtype:'error',request_id:message.request_id,error:'Unsupported'}}); return;}
+ const models=mode==='empty' ? [] : [
+  {value:'default',resolvedModel:'claude-exact-a',displayName:'Default (recommended)',supportsEffort:true,supportedEffortLevels:['low','high']},
+  {value:'alias-a',resolvedModel:'claude-exact-a',displayName:'Model A',supportsEffort:true,supportedEffortLevels:['low','high']},
+  {value:'claude-exact-b',resolvedModel:'claude-exact-b',displayName:'Model B',supportsEffort:true,supportedEffortLevels:['medium']},
+  {value:'claude-no-effort',displayName:'No effort'},
+  {value:'opus',displayName:'Unresolved alias',supportsEffort:true,supportedEffortLevels:['low']}];
+ send({type:'system',subtype:'notice'});
+ send({type:'control_response',response:{subtype:'success',request_id:message.request_id,response:{models}}});
+});
+`);
+  try {await check({command: process.execPath, prefix: [script]}, root, log);}
+  finally {
+    if (!root.startsWith(join(tmpdir(), 'easy model catalog '))) throw new Error('Invalid catalog fixture path');
+    rmSync(root, {recursive: true, force: true});
+  }
+}
+
+test('Claude catalog collapses aliases onto exact IDs and sends only an initialize request', async () => {
+  await withClaude('models', async (command, root, log) => {
+    const models = await readClaudeModels(command, root, ['--safe-mode']);
+    assert.deepEqual(models, [
+      {model: 'claude-exact-a', displayName: 'Model A', isDefault: true, efforts: [{value: 'low', description: ''}, {value: 'high', description: ''}]},
+      {model: 'claude-exact-b', displayName: 'Model B', isDefault: false, efforts: [{value: 'medium', description: ''}]}]);
+    const requests = readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    assert.deepEqual(requests[0].args, ['--safe-mode']);
+    assert.deepEqual(requests.slice(1).map(r => r.request?.subtype), ['initialize']);
+  });
+});
+
+for (const mode of ['error', 'empty', 'timeout']) test(`Claude catalog ${mode} fails without substituting a static model list`, async () => {
+  await withClaude(mode, async (command, root) => {
+    await assert.rejects(readClaudeModels(command, root, [], mode === 'timeout' ? 400 : 5000));
+  });
 });

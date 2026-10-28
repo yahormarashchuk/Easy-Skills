@@ -39,9 +39,9 @@ all layers and is not used. No server is started by these checks. Named grants s
 with an unsupported-capability diagnostic.
 
 Claude's project `.mcp.json` proxy filters remain covered by local MCP fixtures, but
-real Claude launches currently stop: safe-mode preserves managed hooks, whose exclusion
-cannot be established before execution. A strict MCP file alone does not solve that
-separate problem. No user/project/plugin/managed isolation claim is inferred from
+safe-mode preserves managed policy, so Claude launches stop when a managed source
+configures hooks, plugins, a policy helper or `managed-mcp.json`. A strict MCP file
+alone does not solve that separate problem. No user/project/plugin/managed isolation claim is inferred from
 an argument string or a successful configuration write.
 
 The fixture-tested Claude VERIFY invocation exposes Read/Glob/Grep, approved diagnostic

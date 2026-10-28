@@ -98,8 +98,9 @@ rather than inventing choices. Scripted answers use effort values, not menu numb
 
 Provider prompts show a numbered list; press Enter to keep the displayed available
 provider. The installed Codex executable is checked before displaying the menu; login
-and model access are checked separately. Claude Code is shown as unavailable until
-managed-hook isolation can be verified. An invalid or unavailable interactive choice
+and model access are checked separately. Claude Code is shown as unavailable when it
+is missing, signed out, or managed policy configures hooks, plugins or a policy helper.
+Its models and effort levels come from the official client's metadata. An invalid or unavailable interactive choice
 is explained and the same question is asked again. Scripted provider answers use the
 exact ID (`codex` or `claude-code`) and fail clearly when invalid or unavailable.
 
@@ -136,7 +137,7 @@ invalidate old plan execution. Database schema remains v3, and previous approved
 JSON is never silently upgraded. Legacy reliability contracts still need replacement
 approval. See the older [migration record](reliability-implementation.md).
 
-Claude real execution remains blocked until managed-hook isolation can be verified.
+Claude execution stops if managed policy gains hooks, plugins or a policy helper.
 Saved assignments are preserved; replacement requires explicit profile editing.
 Probe identity includes executable, version and execution policy; authentication is
 rechecked. No direct API key is required.

@@ -13,8 +13,6 @@ export const Assignment = z.object({
 }).strict().superRefine((value, ctx) => {
   if (value.provider === 'claude-code' && ['default', 'best', 'sonnet', 'opus', 'haiku', 'fable', 'opusplan'].includes(value.model))
     ctx.addIssue({code: 'custom', message: 'Use an exact Claude model ID; mutable aliases and hybrid routing are not permitted'});
-  if (value.provider === 'claude-code' && value.effort !== undefined)
-    ctx.addIssue({code: 'custom', message: 'Reasoning effort is not supported for Claude Code assignments'});
 });
 export type Assignment = z.infer<typeof Assignment>;
 export const Assignments = z.object({
