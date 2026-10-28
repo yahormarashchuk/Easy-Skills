@@ -129,16 +129,16 @@ program.command('rules-hash').action(() => output({rulesHash: rulesHash(cwd())})
 program.command('agree-rules').requiredOption('--file <json>', 'Completed interview with explicit resolved decisions')
   .option('--apply-hash <hash>', 'Approve the reviewed agreement revision')
   .action(opts => output(opts.applyHash ? applyAgreement(cwd(), read(opts.file), opts.applyHash) : agreementProposal(cwd(), read(opts.file))));
-program.command('doctor').option('--provider <name>', 'codex or claude-code').option('--model <id>', 'Exact model ID for --probe')
+program.command('doctor').option('--provider <name>', 'codex or claude-code').option('--model <id>', 'Exact model ID for --probe').option('--effort <value>', 'Exact reasoning effort for --probe')
   .option('--probe', 'Run a read-only model request and resume its exact session (uses your account quota)')
   .action(async opts => {
     const providers = opts.provider ? [opts.provider] : ['codex', 'claude-code'];
     const client = new CliClient();
     const results: unknown[] = [];
     for (const provider of providers) {
-      const assignment = Assignment.parse({provider, model: opts.model || 'diagnostic-only'});
+      const assignment = Assignment.parse({provider, model: opts.model || 'diagnostic-only', ...(opts.effort ? {effort: opts.effort} : {})});
       const diagnostic = await client.diagnose(assignment, cwd());
-      const result: any = {provider, ...diagnostic, modelVerified: false};
+      const result: any = {provider, ...(opts.model ? {model: assignment.model} : {}), ...(assignment.effort ? {effort: assignment.effort} : {}), ...diagnostic, modelVerified: false};
       if (opts.probe) {
         if (!opts.model) throw new Error('--probe requires an exact --model ID; aliases are not expanded');
         if (!diagnostic.authenticated) throw new Error(provider + ' is not installed/authenticated');

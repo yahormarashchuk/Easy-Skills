@@ -28,6 +28,7 @@ export function invocation(assignment: Assignment, session?: string, mode: 'read
     // Global sandbox and approval flags also apply to exec resume, whose local flags differ.
     const args = ['--ask-for-approval', 'never', '--sandbox', mode === 'read' ? 'read-only' : 'workspace-write', 'exec'];
     args.unshift(...(protocol.mcpOverrides || []).flatMap(override => ['--config', override]));
+    if (assignment.effort) args.unshift('--config', `model_reasoning_effort="${assignment.effort}"`);
     if (session) args.push('resume', session);
     if (protocol.schemaPath) args.push('--output-schema', protocol.schemaPath);
     if (protocol.lastMessagePath) args.push('--output-last-message', protocol.lastMessagePath);

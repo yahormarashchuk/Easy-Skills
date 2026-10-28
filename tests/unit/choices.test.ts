@@ -26,6 +26,12 @@ test('scripted model selection requires exact listed IDs and never silently adop
     ui = new TerminalInteraction({answers: file, nonInteractive: true}); ui.say = () => {};
     assert.equal(await ui.select('profile:model', 'Choose a model', choices), 'model-first');
     await assert.rejects(ui.select('missing', 'Choose a model', choices, 'model-second'), /Input required/); ui.close();
+    writeFileSync(file, JSON.stringify({'profile:effort': '2'}));
+    ui = new TerminalInteraction({answers: file, nonInteractive: true}); ui.say = () => {};
+    await assert.rejects(ui.select('profile:effort', 'Choose effort', [{value: 'medium', label: 'Medium'}, {value: 'high', label: 'High'}], 'medium', 'effort'), /exact effort value/); ui.close();
+    writeFileSync(file, JSON.stringify({'profile:effort': 'high'}));
+    ui = new TerminalInteraction({answers: file, nonInteractive: true}); ui.say = () => {};
+    assert.equal(await ui.select('profile:effort', 'Choose effort', [{value: 'medium', label: 'Medium'}, {value: 'high', label: 'High'}], 'medium', 'effort'), 'high'); ui.close();
   } finally {
     if (!root.startsWith(join(tmpdir(), 'easy model choice '))) throw new Error('Invalid choice fixture path');
     rmSync(root, {recursive: true, force: true});

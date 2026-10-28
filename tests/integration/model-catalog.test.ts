@@ -28,7 +28,7 @@ io.on('line', line=>{
  if(mode==='invalid') {send({id:message.id,result:{data:[{model:'invalid model',displayName:'Invalid'}]}}); return;}
  const second=!!message.params.cursor;
  send({method:'fixture/notification',params:{}});
- send({id:message.id,result:{data:second ? [{id:'opaque-b',model:'model-b',displayName:'Model B',isDefault:true}]
+ send({id:message.id,result:{data:second ? [{id:'opaque-b',model:'model-b',displayName:'Model B',isDefault:true,defaultReasoningEffort:'medium',supportedReasoningEfforts:[{reasoningEffort:'low',description:'Fast'},{reasoningEffort:'medium',description:'Balanced'}]}]
   : [{id:'opaque-a',model:'model-a',displayName:'Model A'},{model:'hidden-model',displayName:'Hidden',hidden:true}],nextCursor:second?null:'page-2'}});
 });
 io.on('close',()=>process.exit(0));
@@ -43,7 +43,7 @@ io.on('close',()=>process.exit(0));
 test('official catalog protocol waits for initialization, paginates, preserves exact models and filters hidden entries', async () => {
   await withServer('pages', async (command, root, log) => {
     const models = await readCodexModels(command, root, ['features.hooks=false']);
-    assert.deepEqual(models, [{model: 'model-a', displayName: 'Model A', isDefault: false}, {model: 'model-b', displayName: 'Model B', isDefault: true}]);
+    assert.deepEqual(models, [{model: 'model-a', displayName: 'Model A', isDefault: false}, {model: 'model-b', displayName: 'Model B', isDefault: true, efforts: [{value: 'low', description: 'Fast'}, {value: 'medium', description: 'Balanced'}], defaultEffort: 'medium'}]);
     const requests = readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line));
     assert.deepEqual(requests[0].args, ['--config', 'features.hooks=false', 'app-server', '--listen', 'stdio://']);
     assert.deepEqual(requests.slice(1).map(r => r.method), ['initialize', 'initialized', 'model/list', 'model/list']);

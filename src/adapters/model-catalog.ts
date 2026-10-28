@@ -5,9 +5,10 @@ import { Assignment, VERSION } from '../contracts.js';
 import { childEnvironment } from '../execution.js';
 import { terminateTree } from '../process.js';
 
-export interface ModelOption {model: string; displayName: string; isDefault: boolean}
+export interface ModelOption {model: string; displayName: string; isDefault: boolean; efforts?: {value: string; description: string}[]; defaultEffort?: string}
 const Page = z.object({data: z.array(z.object({model: z.string().min(1), displayName: z.string().min(1),
-  hidden: z.boolean().optional(), isDefault: z.boolean().optional()})), nextCursor: z.string().min(1).nullable().optional()});
+  hidden: z.boolean().optional(), isDefault: z.boolean().optional(), defaultReasoningEffort: z.string().optional(),
+  supportedReasoningEfforts: z.array(z.object({reasoningEffort: z.string(), description: z.string()})).max(32).optional()})), nextCursor: z.string().min(1).nullable().optional()});
 
 /** Metadata only: no thread, turn, tool invocation, or direct credential access. */
 export function readCodexModels(resolved: {command: string; prefix: string[]}, cwd: string, overrides: string[], timeoutMs = 20_000): Promise<ModelOption[]> {
@@ -55,7 +56,11 @@ export function readCodexModels(resolved: {command: string; prefix: string[]}, c
             const displayName = entry.displayName.replace(/[\u0000-\u001f\u007f-\u009f]/g, '').trim();
             if (!displayName || displayName.length > 200) throw new Error('Invalid Codex model display name');
             if (models.some(existing => existing.model === model)) throw new Error('Codex returned a duplicate model identity; refresh the catalog');
-            models.push({model, displayName, isDefault: entry.isDefault === true});
+            const efforts = entry.supportedReasoningEfforts?.map(item => ({value: Assignment.parse({provider: 'codex', model, effort: item.reasoningEffort}).effort!, description: item.description.replace(/[\u0000-\u001f\u007f-\u009f]/g, '').trim().slice(0, 300)}));
+            if (efforts && new Set(efforts.map(item => item.value)).size !== efforts.length) throw new Error('Codex returned duplicate reasoning effort values');
+            const defaultEffort = entry.defaultReasoningEffort;
+            if (defaultEffort && !efforts?.some(item => item.value === defaultEffort)) throw new Error('Codex returned an unsupported default reasoning effort');
+            models.push({model, displayName, isDefault: entry.isDefault === true, ...(efforts ? {efforts} : {}), ...(defaultEffort ? {defaultEffort} : {})});
           }
           if (page.nextCursor) {
             if (cursors.has(page.nextCursor)) throw new Error('Codex repeated a model catalog cursor');

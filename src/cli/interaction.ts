@@ -61,15 +61,15 @@ export class TerminalInteraction implements Interaction {
       return Provider.parse(option.provider);
     }
   }
-  async select(id: string, question: string, choices: Choice[], fallback?: string) {
-    if (!choices.length) throw new Error('No models are available to select');
+  async select(id: string, question: string, choices: Choice[], fallback?: string, kind: 'model' | 'effort' = 'model') {
+    if (!choices.length) throw new Error(`No ${kind} options are available to select`);
     const scripted = !!this.answers || !!this.options.nonInteractive;
     const defaultIndex = choices.findIndex(choice => choice.value === fallback);
     this.say(question + '\n' + choices.map((choice, index) => `  ${index + 1}. ${choice.label}${index === defaultIndex ? ' [default]' : ''}`).join('\n'));
     while (true) {
-      const answer = await this.input(id, `Choose a model by number (1-${choices.length})`, !scripted && defaultIndex >= 0 ? String(defaultIndex + 1) : undefined);
-      if (typeof answer !== 'string') throw new Error('Expected a model selection for ' + id);
-      try {return resolveChoice(answer, choices, scripted ? undefined : fallback, !scripted);}
+      const answer = await this.input(id, `Choose ${kind === 'model' ? 'a model' : 'reasoning effort'} by number (1-${choices.length})`, !scripted && defaultIndex >= 0 ? String(defaultIndex + 1) : undefined);
+      if (typeof answer !== 'string') throw new Error(`Expected a ${kind} selection for ` + id);
+      try {return resolveChoice(answer, choices, scripted ? undefined : fallback, !scripted, kind);}
       catch (error) {if (scripted) throw error; this.say((error as Error).message);}
     }
   }

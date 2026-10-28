@@ -192,19 +192,23 @@ Choose a model from codex
 Choose a model by number (1-3) [1]: 2
 ```
 
-The selected model's exact ID is saved automatically. The same numbered selection
-is available when assigning individual stages. Catalog discovery runs no AI task;
+After choosing a model, choose its reasoning effort from the numbered options reported
+by the client. Press Enter to use the model's advertised default. Effort controls how
+much reasoning the model can use; higher settings can take longer and use more quota.
+The selected model ID and effort are saved for each stage. Existing profiles without
+an effort retain the CLI's unpinned default until you edit them with `easy-skills config`.
+The same numbered selection is available when assigning individual stages. Catalog discovery runs no AI task;
 account access is checked separately before use. An unavailable saved model requires
 an explicit replacement rather than an automatic fallback.
 
 | Stage | Responsibility | Assignment |
 | --- | --- | --- |
-| DEFINE | Project and task interviews | Your exact provider/model pair |
-| PLAN | Technical implementation planning | Your exact provider/model pair |
-| BUILD | Implementation and corrective changes | Your exact provider/model pair |
-| VERIFY | Acceptance inspection alongside runner-executed checks | Your exact provider/model pair |
-| REVIEW | Separate review of the actual file diffs | Your exact provider/model pair |
-| SHIP | Delivery-readiness inspection before runner publication | Your exact provider/model pair |
+| DEFINE | Project and task interviews | Your provider, model, and effort |
+| PLAN | Technical implementation planning | Your provider, model, and effort |
+| BUILD | Implementation and corrective changes | Your provider, model, and effort |
+| VERIFY | Acceptance inspection alongside runner-executed checks | Your provider, model, and effort |
+| REVIEW | Separate review of the actual file diffs | Your provider, model, and effort |
+| SHIP | Delivery-readiness inspection before runner publication | Your provider, model, and effort |
 
 ```powershell
 easy-skills config

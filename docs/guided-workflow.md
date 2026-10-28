@@ -87,6 +87,15 @@ answers must use exact IDs from that catalog: menu numbers are deliberately reje
 in scripts because catalog ordering can change. Importing an explicit profile remains
 available for advanced operation.
 
+After selecting a model, choose a reasoning effort from the client's reported options.
+The model's advertised default is offered for new assignments; an unavailable saved
+effort needs an explicit replacement. Each stage stores its exact effort in the plan,
+approval and compatibility-probe identity. `doctor --provider codex --model MODEL
+--effort EFFORT --probe` validates that exact assignment. Existing assignments without
+an effort retain the CLI's implicit default and their existing approval/probe identity;
+edit the profile to pin one explicitly. Missing effort metadata stops with a diagnostic
+rather than inventing choices. Scripted answers use effort values, not menu numbers.
+
 Provider prompts show a numbered list; press Enter to keep the displayed available
 provider. The installed Codex executable is checked before displaying the menu; login
 and model access are checked separately. Claude Code is shown as unavailable until
@@ -104,10 +113,11 @@ and can be disabled with `NO_COLOR`; redirected output remains readable without 
 | `profile:reuse` | Reuse displayed saved assignments |
 | `profile:name`, `profile:provider` | Name saved settings and choose the provider |
 | `profile:model` | Numbered model choice interactively; exact catalog ID in scripts |
+| `profile:effort`, `profile:STAGE:effort` | Numbered reasoning effort interactively; exact effort value in scripts |
 | `profile:customize` | Edit individual stages |
 | `profile:STAGE:provider`, `profile:STAGE:model` | Provider and numbered stage model choice; exact catalog ID in scripts |
 | `model-requests` | Allow read-only interviews/planning using account quota |
-| `probe:PROVIDER:MODEL` | Allow launch/resume compatibility validation |
+| `probe:PROVIDER:MODEL[:EFFORT]` | Allow launch/resume validation for the exact assignment |
 | `interview:QUESTION_ID` | Answer a model-derived unresolved question |
 | `rules:approve` | Save displayed rules and commands |
 | `task:specification` | Continue planning with displayed requirements |
@@ -135,7 +145,7 @@ Model discovery uses the official Codex app-server `initialize` / `initialized`
 handshake and paginated `model/list`, with hooks, apps and MCP restrictions checked
 before launch. It requests no thread or inference turn and does not read credential
 stores. Hidden entries are excluded, display names are presented, and the returned
-`model` identity is stored unchanged. Each profile interaction refreshes the catalog;
+`model` identity and selected advertised reasoning effort are stored unchanged. Each profile interaction refreshes the catalog;
 one interaction reuses its displayed provider list across the six stages. A catalog
 can be bundled or cached by the official client, so a listed entry is not proof of
 account entitlement. Existing compatibility probes still establish execution access.

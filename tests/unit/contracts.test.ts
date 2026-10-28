@@ -20,6 +20,12 @@ test('contracts reject unknown dependencies, cycles, duplicate IDs and hidden pe
     assert.equal(Assignment.safeParse({provider: 'other', model: 'exact'}).success, false);
     assert.equal(Assignment.safeParse({provider: 'codex', model: 'x & echo secret'}).success, false);
     assert.equal(Assignment.safeParse({provider: 'claude-code', model: 'opusplan'}).success, false);
+    const legacy = {provider: 'codex' as const, model: 'exact-id'};
+    assert.deepEqual(Assignment.parse(legacy), legacy);
+    assert.equal(hash(Assignment.parse(legacy)), hash(legacy));
+    f.store.recordProbe(legacy, 'fixture-1', '/fixture/client');
+    assert.equal(f.store.hasProbe({...legacy, effort: 'high'}, {version: 'fixture-1', executable: '/fixture/client'}), false);
+    assert.notEqual(hash({...f.run.plan, assignments: {...f.run.plan.assignments, BUILD: legacy}}), hash({...f.run.plan, assignments: {...f.run.plan.assignments, BUILD: {...legacy, effort: 'high'}}}));
     assert.equal(StageResult.safeParse({outcome: 'passed', summary: 'ok'}).success, false);
   } finally {await f.dispose();}
 });
@@ -30,6 +36,12 @@ test('adapter commands preserve exact model and session, use stdin and no bare o
     assert.ok(!spec.args.includes('--last')); assert.ok(!spec.args.includes('--continue'));
     assert.ok(!spec.args.includes('--bare')); assert.ok(!spec.args.some(a => a.includes('bypass')));
   }
+  const effort = invocation({provider: 'codex', model: 'exact-id', effort: 'high'}, 'exact-session');
+  assert.ok(effort.args.includes('model_reasoning_effort="high"'));
+  assert.ok(effort.args.indexOf('model_reasoning_effort="high"') < effort.args.indexOf('exec'));
+  assert.ok(invocation({provider: 'codex', model: 'exact-id', effort: 'ultra'}).args.includes('model_reasoning_effort="ultra"'));
+  assert.equal(Assignment.safeParse({provider: 'codex', model: 'exact-id', effort: 'high"; bad'}).success, false);
+  assert.equal(Assignment.safeParse({provider: 'claude-code', model: 'exact-id', effort: 'high'}).success, false);
   assert.equal(decode('codex', '{"type":"thread.started","thread_id":"s1"}').session, 's1');
   assert.equal(decode('claude-code', '{"type":"system","subtype":"init","session_id":"s2"}').session, 's2');
   assert.equal(decode('claude-code', JSON.stringify({type: 'result', subtype: 'success', is_error: false, structured_output: {outcome: 'passed', summary: 'ok', findings: []}})).result?.outcome, 'passed');

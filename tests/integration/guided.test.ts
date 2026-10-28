@@ -121,15 +121,19 @@ test('new profiles select current client models by number and preserve per-stage
     let calls = 0;
     f.client.listModels = async provider => {
       assert.equal(provider, 'codex'); calls++;
-      return [{model: 'catalog-model-b', displayName: 'Model B', isDefault: true}, {model: 'catalog-model-a', displayName: 'Model A', isDefault: false}];
+      const efforts = [{value: 'medium', description: 'Balanced'}, {value: 'high', description: 'Thorough'}];
+      return [{model: 'catalog-model-b', displayName: 'Model B', isDefault: true, efforts, defaultEffort: 'medium'}, {model: 'catalog-model-a', displayName: 'Model A', isDefault: false, efforts, defaultEffort: 'medium'}];
     };
     Object.assign(f.ui.values, {'profile:name': 'Numbered', 'profile:provider': 'codex', 'profile:model': '2'});
     f.ui.denied.delete('profile:customize');
     for (const stage of ['DEFINE', 'PLAN', 'BUILD', 'VERIFY', 'REVIEW', 'SHIP']) {
       f.ui.values['profile:' + stage + ':provider'] = 'codex'; f.ui.values['profile:' + stage + ':model'] = stage === 'REVIEW' ? '1' : '2';
+      f.ui.values['profile:' + stage + ':effort'] = stage === 'REVIEW' ? '2' : '1';
     }
     const profile = await f.wizard.profile(f.root);
     assert.equal(calls, 1); assert.equal(profile.assignments.BUILD.model, 'catalog-model-a'); assert.equal(profile.assignments.REVIEW.model, 'catalog-model-b');
+    assert.equal(profile.assignments.BUILD.effort, 'medium'); assert.equal(profile.assignments.REVIEW.effort, 'high');
+    assert.notEqual(f.store.probeKey(profile.assignments.BUILD), f.store.probeKey({...profile.assignments.BUILD, effort: 'high'}));
     assert.ok(f.ui.messages.some(text => text.includes('1. Model B') && text.includes('2. Model A')));
     assert.ok(f.ui.messages.some(text => text.includes('[3/6] MODEL SETUP: BUILD') && text.includes('Implement the approved changes')));
     assert.ok(f.ui.messages.some(text => text.includes('[4/6] MODEL SETUP: VERIFY') && text.includes('Run checks')));
@@ -153,7 +157,8 @@ test('invalid interactive stage provider is explained and retried without losing
     ui.confirm = async () => true;
     ui.select = async (_id, _question, choices) => choices[1]!.value;
     f.client.listProviders = async () => [{provider: 'codex', available: true}, {provider: 'claude-code', available: false, reason: 'Isolation is not verified.'}];
-    f.client.listModels = async () => [{model: 'first-model', displayName: 'First', isDefault: true}, {model: 'second-model', displayName: 'Second', isDefault: false}];
+    const efforts = [{value: 'medium', description: 'Balanced'}, {value: 'high', description: 'Thorough'}];
+    f.client.listModels = async () => [{model: 'first-model', displayName: 'First', isDefault: true, efforts, defaultEffort: 'medium'}, {model: 'second-model', displayName: 'Second', isDefault: false, efforts, defaultEffort: 'medium'}];
     const profile = await new Guided(f.store, ui, {client: f.client}).profile(f.root);
     assert.equal(reviewAttempts, 3);
     assert.equal(questions.filter(id => id === 'profile:BUILD:provider').length, 1);
@@ -172,13 +177,21 @@ test('editing refreshes the catalog, requires an explicit replacement for an una
   try {
     await f.wizard.profile(f.root, true, f.profile);
     let calls = 0;
-    f.client.listModels = async () => {calls++; return [{model: 'new-model', displayName: 'New current model', isDefault: true}];};
+    f.client.listModels = async () => {calls++; return [{model: 'new-model', displayName: 'New current model', isDefault: true, efforts: [{value: 'medium', description: 'Balanced'}], defaultEffort: 'medium'}];};
     Object.assign(f.ui.values, {'profile:select': 'Fixture', 'profile:provider': 'codex', 'profile:model': '1'});
     const updated = await f.wizard.profile(f.root, true);
     assert.equal(updated.assignments.BUILD.model, 'new-model'); assert.equal(calls, 1);
     assert.ok(f.ui.messages.some(text => text.includes('saved model is not in the current catalog')));
     f.client.listModels = async () => [];
     await assert.rejects(f.wizard.profile(f.root, true), /no selectable models/);
+  } finally {await f.dispose();}
+});
+
+test('model selection stops when the official catalog does not report effort options', async () => {
+  const f = await setup();
+  try {
+    f.client.listModels = async () => [{model: 'model-no-effort', displayName: 'Model', isDefault: true}];
+    await assert.rejects(f.wizard.profile(f.root), /did not report reasoning effort options/);
   } finally {await f.dispose();}
 });
 
