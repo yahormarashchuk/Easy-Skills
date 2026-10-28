@@ -145,18 +145,21 @@ test('invalid interactive stage provider is explained and retried without losing
     const ui = new TerminalInteraction();
     ui.say = text => {messages.push(text);};
     let reviewAttempts = 0;
-    ui.ask = async (id, _question, fallback) => {
+    Object.assign(ui, {input: async (id: string, _question: string, fallback?: string) => {
       questions.push(id);
-      if (id === 'profile:REVIEW:provider' && reviewAttempts++ === 0) return '1';
-      return fallback || 'Profile';
-    };
+      if (id === 'profile:REVIEW:provider') return ['9', '2', '1'][reviewAttempts++]!;
+      return id === 'profile:name' ? 'Profile' : '';
+    }});
     ui.confirm = async () => true;
     ui.select = async (_id, _question, choices) => choices[1]!.value;
+    f.client.listProviders = async () => [{provider: 'codex', available: true}, {provider: 'claude-code', available: false, reason: 'Isolation is not verified.'}];
     f.client.listModels = async () => [{model: 'first-model', displayName: 'First', isDefault: true}, {model: 'second-model', displayName: 'Second', isDefault: false}];
     const profile = await new Guided(f.store, ui, {client: f.client}).profile(f.root);
-    assert.equal(reviewAttempts, 2);
+    assert.equal(reviewAttempts, 3);
     assert.equal(questions.filter(id => id === 'profile:BUILD:provider').length, 1);
-    assert.ok(messages.some(text => /Unknown provider/.test(text) && /Model numbers/.test(text)));
+    assert.ok(messages.some(text => /1\. Codex CLI/.test(text) && /2\. Claude Code \[unavailable/.test(text)));
+    assert.ok(messages.some(text => /Choose a provider number/.test(text)));
+    assert.ok(messages.some(text => /Claude Code is unavailable/.test(text)));
     assert.equal(profile.assignments.BUILD.model, 'second-model');
     assert.equal(profile.assignments.REVIEW.model, 'second-model');
     assert.equal(profile.assignments.REVIEW.provider, 'codex');

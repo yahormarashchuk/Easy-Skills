@@ -8,6 +8,7 @@ import { resolveChoice, type Choice } from './choices.js';
 import { Provider } from '../contracts.js';
 import { stageBanner, useColor } from './presentation.js';
 import type { Stage } from '../contracts.js';
+import type { ProviderOption } from '../adapters/index.js';
 
 const Script = z.record(z.string(), z.union([z.string(), z.boolean()]));
 /** Missing scripted consent is always an error, never an implicit yes. */
@@ -32,15 +33,32 @@ export class TerminalInteraction implements Interaction {
     if (!answer && !fallback) throw new Error('A value is required for ' + id);
     return answer || fallback!;
   }
-  async askProvider(id: string, question: string, fallback: Provider): Promise<Provider> {
+  async askProvider(id: string, question: string, fallback: Provider, options?: ProviderOption[]): Promise<Provider> {
     const scripted = !!this.answers || !!this.options.nonInteractive;
+    const providers = options || Provider.options.map(provider => ({provider, available: true}));
+    const labels: Record<Provider, string> = {'codex': 'Codex CLI', 'claude-code': 'Claude Code'};
+    this.say(question + '\n' + providers.map((option, i) => `  ${i + 1}. ${labels[option.provider]}${option.available ? '' : ' [unavailable: ' + (option.reason || 'Check the client setup.') + ']'}${option.available && option.provider === fallback ? ' [default]' : ''}`).join('\n'));
+    this.say('Client login and model access are checked separately after selection.');
+    if (!providers.some(option => option.available)) throw new Error('No providers are currently available. Install or configure the official Codex CLI and retry.');
+    const defaultIndex = providers.findIndex(option => option.provider === fallback && option.available);
     while (true) {
-      const answer = await this.ask(id, question, fallback);
-      const provider = Provider.safeParse(answer);
-      if (provider.success) return provider.data;
-      const message = 'Unknown provider. Enter codex or claude-code, or press Enter to keep the displayed provider. Model numbers are chosen at the next prompt.';
-      if (scripted) throw new Error(`Invalid provider for ${id}. Enter codex or claude-code.`);
-      this.say(message);
+      const answer = await this.input(id, `Choose a provider by number (1-${providers.length})`, !scripted && defaultIndex >= 0 ? String(defaultIndex + 1) : undefined);
+      if (typeof answer !== 'string') throw new Error('Expected a provider selection for ' + id);
+      const value = answer.trim();
+      if (scripted && /^\d+$/.test(value)) throw new Error(`Invalid provider for ${id}. Scripted answers must use a provider ID such as codex or claude-code.`);
+      const index = /^[1-9]\d*$/.test(value) ? Number(value) - 1 : -1;
+      const option = !scripted && !value && defaultIndex >= 0 ? providers[defaultIndex] : index >= 0 ? providers[index] : providers.find(item => item.provider === value);
+      if (!option) {
+        const message = `Choose a provider number from 1 to ${providers.length}${defaultIndex >= 0 && !scripted ? ', or press Enter for the default' : ''}.`;
+        if (scripted) throw new Error(`Invalid provider for ${id}. Enter codex or claude-code.`);
+        this.say(message); continue;
+      }
+      if (!option.available) {
+        const message = `${labels[option.provider]} is unavailable. ${option.reason || 'Check the client setup.'}`;
+        if (scripted) throw new Error(message);
+        this.say(message + ' Choose an available provider.'); continue;
+      }
+      return Provider.parse(option.provider);
     }
   }
   async select(id: string, question: string, choices: Choice[], fallback?: string) {

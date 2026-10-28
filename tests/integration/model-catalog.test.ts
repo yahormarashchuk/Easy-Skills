@@ -63,5 +63,6 @@ test('Claude catalog discovery stays fail-closed and injected protocol clients c
   const client = new CliClient(async () => {calls++; throw new Error('Unexpected process');});
   await assert.rejects(client.listModels('claude-code', '.'), /managed.*hook|hook exclusion/);
   await assert.rejects(client.listModels('codex', '.'), /Injected clients/);
+  await assert.rejects(client.listProviders('.'), /Injected clients/);
   assert.equal(calls, 0);
 });

@@ -4,7 +4,7 @@ import { join, resolve, relative, isAbsolute } from 'node:path';
 import { z } from 'zod';
 import { stringify } from 'yaml';
 import { Assignments, Assignment, Plan, Project, Provider, Stage, type Run } from '../contracts.js';
-import { CliClient, type Client } from '../adapters/index.js';
+import { CliClient, type Client, type ProviderOption } from '../adapters/index.js';
 import { Gh, type GitHub, type Issue } from '../github/index.js';
 import { Git } from '../git/index.js';
 import { Store } from '../persistence/store.js';
@@ -23,7 +23,7 @@ import { stageBanner } from '../cli/presentation.js';
 export interface Interaction {
   say(text: string): void;
   ask(id: string, question: string, fallback?: string): Promise<string>;
-  askProvider?(id: string, question: string, fallback: Assignment['provider']): Promise<Assignment['provider']>;
+  askProvider?(id: string, question: string, fallback: Assignment['provider'], options?: ProviderOption[]): Promise<Assignment['provider']>;
   stage?(stage: Stage, context: 'model' | 'current'): void;
   confirm(id: string, question: string, binding?: string): Promise<boolean>;
   select?(id: string, question: string, choices: Choice[], fallback?: string): Promise<string>;
@@ -69,6 +69,7 @@ export class Guided {
       if (await this.ui.confirm('profile:reuse', 'Use this saved AI profile?')) return profile;
     }
     if (!supplied) {
+      const providers = this.ui.askProvider && this.client.listProviders ? await this.client.listProviders(root) : undefined;
       if (saved) {
         this.ui.say('Saved profiles: ' + saved.profiles.map(p => p.name).join(', '));
         const selected = await this.ui.ask('profile:select', 'Profile name to use or create', profile?.name || 'Balanced');
@@ -80,14 +81,14 @@ export class Guided {
             return profile;
           }
         }
-        const provider = await this.chooseProvider('profile:provider', 'Default provider (codex or claude-code)', profile?.assignments.BUILD.provider || 'codex');
+        const provider = await this.chooseProvider('profile:provider', 'Choose the default provider', profile?.assignments.BUILD.provider || 'codex', providers);
         const model = await this.chooseModel(root, provider, 'profile:model', catalogs, profile?.assignments.BUILD.model);
         const assignment = Assignment.parse({provider, model});
         profile = {name: selected, assignments: Assignments.parse(Object.fromEntries(Stage.options.map(stage => [stage, assignment])))};
       } else {
         this.ui.say('A profile is a name for your saved stage settings. Press Enter to use Balanced, or choose any name you like.');
         const name = await this.ui.ask('profile:name', 'Name for your model profile', 'Balanced');
-        const provider = await this.chooseProvider('profile:provider', 'Provider (codex or claude-code)', 'codex');
+        const provider = await this.chooseProvider('profile:provider', 'Choose a provider', 'codex', providers);
         const model = await this.chooseModel(root, provider, 'profile:model', catalogs);
         const assignment = Assignment.parse({provider, model});
         profile = {name, assignments: Assignments.parse(Object.fromEntries(Stage.options.map(stage => [stage, assignment])))};
@@ -95,7 +96,7 @@ export class Guided {
       if (await this.ui.confirm('profile:customize', 'Choose a different assignment for individual stages?')) {
         for (const stage of Stage.options) {
           this.showStage(stage, 'model');
-          const provider = await this.chooseProvider('profile:' + stage + ':provider', stage + ' provider', profile.assignments[stage].provider);
+          const provider = await this.chooseProvider('profile:' + stage + ':provider', stage + ' provider', profile.assignments[stage].provider, providers);
           const model = await this.chooseModel(root, provider, 'profile:' + stage + ':model', catalogs, profile.assignments[stage].model, stage);
           profile.assignments[stage] = Assignment.parse({provider, model});
         }
@@ -113,10 +114,11 @@ export class Guided {
   private showStage(stage: Stage, context: 'model' | 'current') {
     if (this.ui.stage) this.ui.stage(stage, context); else this.ui.say(stageBanner(stage, context));
   }
-  private async chooseProvider(id: string, question: string, fallback: Assignment['provider']): Promise<Assignment['provider']> {
-    const value = this.ui.askProvider ? await this.ui.askProvider(id, question, fallback) : await this.ui.ask(id, question, fallback);
+  private async chooseProvider(id: string, question: string, fallback: Assignment['provider'], options?: ProviderOption[]): Promise<Assignment['provider']> {
+    const value = this.ui.askProvider ? await this.ui.askProvider(id, question, fallback, options) : await this.ui.ask(id, question, fallback);
     const result = Provider.safeParse(value);
     if (!result.success) throw new Error(`Invalid provider for ${id}. Enter codex or claude-code.`);
+    if (options && !options.some(option => option.provider === result.data && option.available)) throw new Error(`Selected provider ${result.data} is unavailable; choose an available provider explicitly.`);
     return result.data;
   }
   private async chooseModel(root: string, inputProvider: string, id: string, catalogs: Map<Assignment['provider'], ModelOption[]>, current?: string, stage?: Stage) {

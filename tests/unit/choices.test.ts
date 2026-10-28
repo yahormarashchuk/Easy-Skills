@@ -37,10 +37,33 @@ test('invalid scripted provider fails clearly without retrying or substituting a
   try {
     writeFileSync(file, JSON.stringify({'profile:REVIEW:provider': '1'}));
     const ui = new TerminalInteraction({answers: file, nonInteractive: true});
-    await assert.rejects(ui.askProvider('profile:REVIEW:provider', 'REVIEW provider', 'codex'), /Invalid provider.*codex or claude-code/);
+    await assert.rejects(ui.askProvider('profile:REVIEW:provider', 'REVIEW provider', 'codex'), /Scripted answers must use a provider ID/);
     ui.close();
+    writeFileSync(file, JSON.stringify({'profile:REVIEW:provider': 'claude-code'}));
+    const blocked = new TerminalInteraction({answers: file, nonInteractive: true});
+    await assert.rejects(blocked.askProvider('profile:REVIEW:provider', 'REVIEW provider', 'codex', [{provider: 'codex', available: true}, {provider: 'claude-code', available: false, reason: 'Isolation is not verified.'}]), /Claude Code is unavailable/);
+    blocked.close();
+    writeFileSync(file, JSON.stringify({'profile:REVIEW:provider': 'codex'}));
+    const valid = new TerminalInteraction({answers: file, nonInteractive: true});
+    assert.equal(await valid.askProvider('profile:REVIEW:provider', 'REVIEW provider', 'codex', [{provider: 'codex', available: true}]), 'codex');
+    valid.close();
   } finally {
     if (!root.startsWith(join(tmpdir(), 'easy provider choice '))) throw new Error('Invalid provider fixture path');
     rmSync(root, {recursive: true, force: true});
   }
+});
+
+test('provider picker requires an explicit replacement for an unavailable saved provider', async () => {
+  const ui = new TerminalInteraction(), messages: string[] = [], prompts: (string | undefined)[] = [];
+  const inputs = ['', '2', '1'];
+  ui.say = text => {messages.push(text);};
+  Object.assign(ui, {input: async (_id: string, _question: string, fallback?: string) => {prompts.push(fallback); return inputs.shift();}});
+  const options = [{provider: 'codex' as const, available: true}, {provider: 'claude-code' as const, available: false, reason: 'Isolation is not verified.'}];
+  assert.equal(await ui.askProvider('profile:REVIEW:provider', 'REVIEW provider', 'claude-code', options), 'codex');
+  assert.deepEqual(prompts, [undefined, undefined, undefined]);
+  assert.ok(messages.some(text => text.includes('Choose a provider number')));
+  assert.ok(messages.some(text => text.includes('Claude Code is unavailable')));
+  assert.equal(inputs.length, 0);
+  await assert.rejects(ui.askProvider('x', 'Provider', 'codex', options.map(option => ({...option, available: false}))), /No providers are currently available/);
+  ui.close();
 });

@@ -88,14 +88,24 @@ function parseResult(text: unknown): StageResult | undefined {
   } catch {return undefined;}
 }
 export interface Client {
+  listProviders?(cwd: string): Promise<ProviderOption[]>;
   listModels?(provider: Assignment['provider'], cwd: string): Promise<ModelOption[]>;
   diagnose?(assignment: Assignment, cwd: string): Promise<Diagnostic>;
   run(assignment: Assignment, prompt: string, options: ProcessOptions & {
     session?: string; mode?: 'read' | 'write'; stage?: Stage; projectRoot?: string; capabilities?: Capabilities; onSession?: (session: string) => void;
   }): Promise<StageResult>;
 }
+export interface ProviderOption {provider: Assignment['provider']; available: boolean; reason?: string}
 export class CliClient implements Client {
   constructor(readonly runner: typeof execute = execute) {}
+  async listProviders(cwd: string): Promise<ProviderOption[]> {
+    if (this.runner !== execute) throw new Error('Injected clients must supply their own provider availability');
+    let codex: ProviderOption;
+    try {clientCommand('codex', cwd); codex = {provider: 'codex', available: true};}
+    catch {codex = {provider: 'codex', available: false, reason: 'Official Codex CLI could not be found or verified. Install or configure it and retry.'};}
+    return [codex, {provider: 'claude-code', available: false,
+      reason: 'Claude Code is temporarily unavailable: managed hook isolation cannot yet be verified.'}];
+  }
   async listModels(provider: Assignment['provider'], cwd: string): Promise<ModelOption[]> {
     if (provider === 'claude-code') throw new ClientError('prerequisite', CLAUDE_ISOLATION_LIMIT + ' Select Codex explicitly to use the model picker.');
     if (this.runner !== execute) throw new Error('Injected clients must supply their own model catalog; real model discovery was not launched');

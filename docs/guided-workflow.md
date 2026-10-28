@@ -87,10 +87,12 @@ answers must use exact IDs from that catalog: menu numbers are deliberately reje
 in scripts because catalog ordering can change. Importing an explicit profile remains
 available for advanced operation.
 
-Provider prompts accept `codex` or `claude-code`; press Enter to keep the displayed
-provider. An invalid interactive answer is explained and the same question is asked
-again. Model numbers belong to the following model prompt. Invalid scripted provider
-answers stop with a clear error and must be corrected in the answer file.
+Provider prompts show a numbered list; press Enter to keep the displayed available
+provider. The installed Codex executable is checked before displaying the menu; login
+and model access are checked separately. Claude Code is shown as unavailable until
+managed-hook isolation can be verified. An invalid or unavailable interactive choice
+is explained and the same question is asked again. Scripted provider answers use the
+exact ID (`codex` or `claude-code`) and fail clearly when invalid or unavailable.
 
 Stage banners show each model-setup position and explain its responsibility. DEFINE
 and PLAN are marked during the guided conversation; `easy-skills status` highlights

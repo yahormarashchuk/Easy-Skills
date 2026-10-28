@@ -178,6 +178,9 @@ Save a named profile such as **Fast**, **Balanced**, or **High Quality**. A prof
 is simply a name for saved settings; press Enter to use **Balanced** if you are unsure.
 Easy Skills loads the current catalog from your official Codex CLI and lets you
 choose a model by number. You do not need to know or type its technical ID.
+Provider prompts also use a numbered list. Claude Code is shown as unavailable until
+its managed-hook isolation can be verified; selecting an unavailable provider explains
+the limitation and asks again. Login and model access are checked after selection.
 
 For example (the actual list depends on your installed client and account):
 
