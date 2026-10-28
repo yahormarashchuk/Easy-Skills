@@ -24,3 +24,19 @@ export function stageBanner(stage: DisplayStage, context: 'model' | 'current', c
   const heading = color ? `\u001b[1;${details[stage].color}m${line}\u001b[0m` : line;
   return `${heading}\n  ${details[stage].description}\n${'-'.repeat(Math.min(line.length, 70))}`;
 }
+
+/** Preserve question text while adding line breaks at spaces for easier reading. */
+export function interviewQuestion(question: string, number: number, columns = 80, color = false): string {
+  const width = Math.max(40, Math.min(100, columns - 2));
+  const lines: string[] = [];
+  for (let line of question.split('\n')) {
+    while (line.length > width) {
+      const split = line.lastIndexOf(' ', width);
+      if (split <= 0) break;
+      lines.push(line.slice(0, split)); line = line.slice(split + 1);
+    }
+    lines.push(line);
+  }
+  const heading = `---------- QUESTION ${number} ----------`;
+  return `${color ? `\u001b[1;36m${heading}\u001b[0m` : heading}\n${lines.join('\n')}\n${'-'.repeat(heading.length)}`;
+}

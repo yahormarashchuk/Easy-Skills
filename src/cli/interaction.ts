@@ -6,7 +6,7 @@ import type { Interaction } from '../runner/guided.js';
 import { redact } from '../util.js';
 import { resolveChoice, type Choice } from './choices.js';
 import { Provider } from '../contracts.js';
-import { stageBanner, useColor } from './presentation.js';
+import { interviewQuestion, stageBanner, useColor } from './presentation.js';
 import type { Stage } from '../contracts.js';
 import type { ProviderOption } from '../adapters/index.js';
 
@@ -15,6 +15,7 @@ const Script = z.record(z.string(), z.union([z.string(), z.boolean()]));
 export class TerminalInteraction implements Interaction {
   private answers?: z.infer<typeof Script>;
   private terminal?: ReturnType<typeof createInterface>;
+  private interviewCount = 0;
   constructor(readonly options: {answers?: string; nonInteractive?: boolean} = {}) {
     if (options.answers) this.answers = Script.parse(JSON.parse(readFileSync(options.answers, 'utf8')));
   }
@@ -25,9 +26,15 @@ export class TerminalInteraction implements Interaction {
     if (this.options.nonInteractive || this.answers || !stdin.isTTY || !stdout.isTTY)
       throw new Error(`Input required (${id}): ${question}. Use an interactive terminal or --non-interactive --answers FILE with explicit answers and approvals.`);
     this.terminal ||= createInterface({input: stdin, output: stdout});
-    return (await this.terminal.question(question + (fallback ? ` [${fallback}]` : '') + ': ')).trim();
+    const answer = (await this.terminal.question(question + (fallback ? ` [${fallback}]` : '') + ': ')).trim();
+    stdout.write('\n');
+    return answer;
   }
   async ask(id: string, question: string, fallback?: string) {
+    if (id.startsWith('interview:') && !this.answers && !this.options.nonInteractive && stdin.isTTY && stdout.isTTY) {
+      this.say(interviewQuestion(question, ++this.interviewCount, stdout.columns, useColor(stdout.isTTY)));
+      question = 'Your answer';
+    }
     const answer = await this.input(id, question, fallback);
     if (typeof answer !== 'string') throw new Error('Expected text for ' + id);
     if (!answer && !fallback) throw new Error('A value is required for ' + id);
