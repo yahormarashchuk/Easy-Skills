@@ -9,7 +9,7 @@ Install the compiled package from the
 
 That asset contains the original alpha. The reliability changes in this checkout
 are unreleased; build a current tarball below to test the updated commands.
-Claude launches are refused when managed policy configures hooks, plugins or a policy helper.
+Claude launches are refused when managed policy configures hooks, plugins, a policy helper or extra allow rules.
 Codex requires verified empty MCP grants and a fresh authorized model probe. See the
 [migration and implementation record](../reliability-implementation.md).
 

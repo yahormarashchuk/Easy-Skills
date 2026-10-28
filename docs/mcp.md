@@ -40,7 +40,7 @@ with an unsupported-capability diagnostic.
 
 Claude's project `.mcp.json` proxy filters remain covered by local MCP fixtures, but
 safe-mode preserves managed policy, so Claude launches stop when a managed source
-configures hooks, plugins, a policy helper or `managed-mcp.json`. A strict MCP file
+configures hooks, plugins, a policy helper, extra allow rules or `managed-mcp.json`. A strict MCP file
 alone does not solve that separate problem. No user/project/plugin/managed isolation claim is inferred from
 an argument string or a successful configuration write.
 

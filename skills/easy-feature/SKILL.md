@@ -9,7 +9,7 @@ interview, saved model selection, technical planning and one execution confirmat
 Default direct mode reuses the Issue and produces one task branch and one reviewed PR.
 No intermediate merge or branch-protection access is required for manual PR delivery.
 Use `easy-skills revise ISSUE_NUMBER "feedback"` to review a replacement approval and
-update that same branch/PR. Keep exact assignments and the Claude isolation restriction.
+update that same branch/PR. Keep exact assignments; Claude launches stay subject to the managed-policy gate.
 
 The following procedure remains available for advanced multi-task features.
 For ordinary terminal model selection, use the numbered current-client catalog in
@@ -38,6 +38,7 @@ Implementation and Issue publication wait until the user approves the exact plan
 main-branch merge requires a separate revision-bound decision.
 
 The approval also includes setup, protected verification inputs and the total completed
-repair limit. Diagnose capability isolation before execution. Claude real launches and
-Codex named MCP grants currently stop with a prerequisite diagnostic; explain the limit
-and preserve the user's assignment. No automatic replacement is authorized.
+repair limit. Diagnose capability isolation before execution. Claude launches stop with a
+prerequisite diagnostic only when managed policy configures hooks, plugins, a policy helper,
+extra allow rules or managed MCP servers; Codex named MCP grants always stop. Explain the limit and preserve
+the user's assignment. No automatic replacement is authorized.

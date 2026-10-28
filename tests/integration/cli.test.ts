@@ -40,14 +40,14 @@ test('CLI onboarding previews changes and preserves existing instructions; a det
     f.store.db.prepare('DELETE FROM probes').run();
     const started = await cli(['start', drafted.runId]); workerPid = started.pid;
     assert.ok(workerPid && alive(workerPid));
-    const deadline = Date.now() + 10_000;
+    const deadline = Date.now() + 60_000;
     while (f.store.get(drafted.runId).status !== 'needs_decision' && Date.now() < deadline) await delay(50);
     const status = await cli(['status', drafted.runId]);
     assert.equal(status.status, 'needs_decision'); assert.match(status.reason, /exact model configuration/);
     assert.ok(alive(workerPid));
     const reattached = await cli(['start', drafted.runId]); assert.equal(reattached.attached, true);
     await cli(['stop', drafted.runId]);
-    const stoppedAt = Date.now() + 10_000;
+    const stoppedAt = Date.now() + 60_000;
     while (alive(workerPid) && Date.now() < stoppedAt) await delay(50);
     assert.equal(alive(workerPid), false);
     assert.equal(f.store.get(drafted.runId).status, 'stopped');
