@@ -6,7 +6,8 @@ import { homedir, tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { assignmentMcp } from './mcp-permissions.js';
 import { clientCommand, childEnvironment } from '../execution.js';
-import { readCodexModels, type ModelOption } from './model-catalog.js';
+import { readClaudeModels, readCodexModels, type ModelOption } from './model-catalog.js';
+import { inspectClaudePolicy, readClaudeAccount, type PolicySources } from './claude-policy.js';
 
 export type ErrorKind = 'quota' | 'auth' | 'network' | 'model' | 'failure' | 'protocol' | 'refusal' | 'prerequisite' | 'review_input' | 'waiting_ci' | 'waiting_merge';
 export class ClientError extends Error {
@@ -38,8 +39,9 @@ export function invocation(assignment: Assignment, session?: string, mode: 'read
   const diagnostics = protocol.capabilities?.diagnostics || [], browser = protocol.capabilities?.browserTools || [];
   if (diagnostics.some(d => /[\r\n\0]/.test(d)) || browser.some(t => !/^mcp__[\w-]+__[\w-]+$/.test(t))) throw new Error('Unsupported diagnostic command or browser tool permission');
   const allowed = mode === 'write' ? ['Read', 'Glob', 'Grep', 'Edit', 'Write', 'Bash'] : ['Read', 'Glob', 'Grep', ...diagnostics.map(d => `Bash(${d})`), ...browser];
-  const args = ['--safe-mode', '--setting-sources', '', '-p', '--model', assignment.model, '--output-format', 'stream-json', '--verbose', '--json-schema', JSON.stringify(outputSchema(protocol.planning)),
+  const args = [...CLAUDE_BASE_ARGS, '-p', '--model', assignment.model, '--output-format', 'stream-json', '--verbose', '--json-schema', JSON.stringify(outputSchema(protocol.planning)),
     '--permission-mode', 'dontAsk', '--allowedTools', ...allowed];
+  if (assignment.effort) args.push('--effort', assignment.effort);
   if (session) args.push('--resume', session);
   if (settingsPath) args.push('--settings', settingsPath);
   if (protocol.mcpPath) args.push('--strict-mcp-config', '--mcp-config', protocol.mcpPath);
@@ -104,13 +106,19 @@ export class CliClient implements Client {
     let codex: ProviderOption;
     try {clientCommand('codex', cwd); codex = {provider: 'codex', available: true};}
     catch {codex = {provider: 'codex', available: false, reason: 'Official Codex CLI could not be found or verified. Install or configure it and retry.'};}
-    return [codex, {provider: 'claude-code', available: false,
-      reason: 'Claude Code is temporarily unavailable: managed hook isolation cannot yet be verified.'}];
+    let claude: ProviderOption;
+    try {await restrictClaude(clientCommand('claude-code', cwd), cwd); claude = {provider: 'claude-code', available: true};}
+    catch (error) {claude = {provider: 'claude-code', available: false, reason: error instanceof ClientError ? error.message : 'Official Claude Code CLI could not be found or verified. Install or configure it and retry.'};}
+    return [codex, claude];
   }
   async listModels(provider: Assignment['provider'], cwd: string): Promise<ModelOption[]> {
-    if (provider === 'claude-code') throw new ClientError('prerequisite', CLAUDE_ISOLATION_LIMIT + ' Select Codex explicitly to use the model picker.');
     if (this.runner !== execute) throw new Error('Injected clients must supply their own model catalog; real model discovery was not launched');
     const resolved = clientCommand(provider, cwd);
+    if (provider === 'claude-code') {
+      await restrictClaude(resolved, cwd);
+      return readClaudeModels(resolved, cwd, [...CLAUDE_BASE_ARGS, '--settings', JSON.stringify(CLAUDE_SETTINGS), '--strict-mcp-config', '-p',
+        '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'dontAsk', '--tools', '']);
+    }
     const auth = await execute({command: resolved.command, args: [...resolved.prefix, 'login', 'status']}, {cwd, role: 'client', timeoutMs: 15_000});
     if (auth.code !== 0) throw new ClientError('auth', 'Sign in with codex login before choosing a model');
     const restrictions = await restrictCodex(resolved, cwd);
@@ -124,7 +132,7 @@ export class CliClient implements Client {
     const settingsPath = assignment.provider === 'claude-code' ? join(temp, 'settings.json') : undefined;
     const schemaPath = join(temp, 'output-schema.json'), lastMessagePath = join(temp, 'final.json');
     writeFileSync(schemaPath, JSON.stringify(outputSchema(options.stage === 'PLAN')), {mode: 0o600});
-    if (settingsPath) writeFileSync(settingsPath, JSON.stringify({fallbackModel: [], switchModelsOnFlag: false, disableAllHooks: true}), {mode: 0o600});
+    if (settingsPath) writeFileSync(settingsPath, JSON.stringify(CLAUDE_SETTINGS), {mode: 0o600});
     let response;
     try {
     const mcp = assignmentMcp(options.projectRoot || options.cwd, temp, assignment.provider, options.capabilities?.browserTools || []);
@@ -136,11 +144,7 @@ export class CliClient implements Client {
       if (assignment.provider === 'codex') {
         const overrides = await restrictCodex(resolved, options.cwd);
         command.args.unshift(...overrides.flatMap(value => ['--config', value]));
-      } else {
-        // --safe-mode retains managed hooks. Neither file inspection nor a post-init
-        // tool list can establish their exclusion before a SessionStart hook runs.
-        throw new ClientError('prerequisite', CLAUDE_ISOLATION_LIMIT);
-      }
+      } else await restrictClaude(resolved, options.cwd);
       command.command = resolved.command; command.args.unshift(...resolved.prefix);
     }
     response = await this.runner(command, {
@@ -158,6 +162,8 @@ export class CliClient implements Client {
       },
     });
     if (assignment.provider === 'codex' && existsSync(lastMessagePath)) result = parseResult(readFileSync(lastMessagePath, 'utf8'));
+    // Organization policy can be refreshed during a session; never accept work produced after hooks appeared.
+    if (assignment.provider === 'claude-code' && this.runner === execute) await restrictClaude(clientCommand('claude-code', options.cwd), options.cwd);
     } finally {rmSync(temp, {recursive: true, force: true});}
     if (error || response.code !== 0 || response.timedOut) {
       const detail = error || response.stderr || response.stdout || (response.timedOut ? 'Client timed out' : 'Client exited without result');
@@ -177,8 +183,10 @@ export class CliClient implements Client {
         try {authenticated = JSON.parse(auth.stdout).loggedIn === true;} catch {authenticated = false;}
       }
       let isolation = false, detail: string | undefined;
-      if (assignment.provider === 'claude-code') detail = CLAUDE_ISOLATION_LIMIT;
-      else try {await restrictCodex(resolved, cwd); isolation = true;} catch (error) {detail = (error as Error).message;}
+      try {
+        if (assignment.provider === 'claude-code') await restrictClaude(resolved, cwd); else await restrictCodex(resolved, cwd);
+        isolation = true;
+      } catch (error) {detail = (error as Error).message;}
       return {installed: true, authenticated, isolation, detail, executable: command, version: (version.stdout || version.stderr).trim()};
     } catch (e) {return {installed: false, authenticated: false, detail: (e as Error).message};}
   }
@@ -202,5 +210,17 @@ export async function restrictCodex(resolved: {command: string; prefix: string[]
   if (!Array.isArray(effective) || effective.some(s => s.enabled !== false)) throw new ClientError('prerequisite', 'Unauthorized MCP servers remain enabled; launch refused');
   return overrides;
 }
-export const CLAUDE_ISOLATION_LIMIT = 'Claude Code launch refused: managed/remote hook exclusion cannot be verified before execution with the supported configuration-only interface. Safe-mode retains managed hooks. A separately authorized isolation investigation is required; no provider fallback is allowed.';
+const CLAUDE_SETTINGS = {fallbackModel: [], switchModelsOnFlag: false, disableAllHooks: true};
+const CLAUDE_BASE_ARGS = ['--safe-mode', '--setting-sources', ''];
+/**
+ * --safe-mode, empty setting sources and disableAllHooks exclude user, project and plugin
+ * hooks, but managed policy still applies. Refuse unless no managed source configures
+ * hooks, plugins or a policy helper. Checked before and after every launch.
+ */
+export async function restrictClaude(resolved: {command: string; prefix: string[]}, cwd: string, runner = execute, sources?: PolicySources): Promise<void> {
+  const account = await readClaudeAccount(resolved, cwd, runner);
+  if (!account.loggedIn) throw new ClientError('auth', 'Sign in with claude auth login before using Claude Code');
+  const refusal = await inspectClaudePolicy(account, sources);
+  if (refusal) throw new ClientError('prerequisite', 'Claude Code launch refused: ' + refusal + ' No provider fallback is allowed.');
+}
 export interface Diagnostic {installed: boolean; authenticated: boolean; isolation?: boolean; executable?: string; version?: string; detail?: string}

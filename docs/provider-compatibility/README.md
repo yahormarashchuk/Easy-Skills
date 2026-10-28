@@ -1,7 +1,7 @@
 # Client compatibility
 
-For the current blockers and acceptance criteria for enabling Claude Code, see the
-[Claude isolation investigation](claude-isolation-investigation.md).
+For the managed-policy gate, model discovery and current observations for Claude Code,
+see [Claude managed policy](claude-isolation-investigation.md).
 
 On 2026-10-27, native Windows / Node.js 24.22.0 / Codex CLI 0.163.0 returned eight
 picker-visible models through the official app-server initialization and paginated
@@ -10,11 +10,11 @@ metadata process. No thread or inference turn was requested. This observation va
 catalog discovery only; listing does not establish entitlement or authorize execution.
 The interactive picker stores the returned exact model ID after numeric selection.
 Hidden models, malformed/empty responses, repeated cursors and discovery failures
-have fixture coverage. Claude discovery/execution remains blocked by the isolation limit.
+have fixture coverage. Claude discovery uses the client's `initialize` metadata request.
 
 **Alpha.2:** the adapter execution policy changed, so these historical model probes
-do not authorize current execution. Real Claude launches are refused because managed
-hook exclusion cannot be verified before execution. Codex's configuration-only empty
+do not authorize current execution. Real Claude launches are refused when managed
+policy configures hooks, plugins or a policy helper. Codex's configuration-only empty
 MCP/hook restriction check passed locally on 2026-10-22; no revised model launch/resume
 probe was performed. See [the current implementation record](../reliability-implementation.md).
 
@@ -43,7 +43,7 @@ maintained; availability is verified through the actual selected client's respon
 Codex uses saved CLI login, `exec --json --output-schema ... --output-last-message ...`
 and explicit resume with the same output channels, with global
 workspace-write/read-only and noninteractive approval options. Claude uses stdin,
-`-p --output-format stream-json --verbose --json-schema ... --model ID`, explicit --resume, dontAsk and
+`-p --output-format stream-json --verbose --json-schema ... --model ID --effort LEVEL`, explicit --resume, dontAsk and
 stage-specific tool permissions. No --bare, continue-last or bypass-sandbox option is
 used. Official client binaries and their authentication files remain unchanged.
 Interim agent messages never establish completion. Small structured schemas are
@@ -56,9 +56,8 @@ models are checked against the exact assigned ID; a mismatch stops the task. A m
 policy or upstream client can still reject that configuration. The intended controls
 follow [Claude's documented model configuration](https://code.claude.com/docs/en/model-config).
 Model identity alone was checked in the original tool-free probe with Claude Code 2.1.306 and
-`claude-sonnet-5-5`. That observation does not validate the revised fallback, permission
-or hook configuration. Current real launch refusal takes precedence over the older
-usage examples. Other versions/configurations need their own authorized validation.
+`claude-sonnet-5-5`. The revised configuration with effort passed a read-only request and resume on
+2026-10-28 (`claude-haiku-5-5`, effort `low`), not a full autonomous feature run. Other versions/configurations need their own authorized validation.
 
 These options follow [OpenAI non-interactive documentation](https://developers.openai.com/codex/noninteractive),
 the [Claude CLI reference](https://code.claude.com/docs/en/cli-reference), and

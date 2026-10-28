@@ -13,8 +13,8 @@ them; use a tarball built from this checkout to try the current implementation.
 See [implementation status](implementation-status.md).
 
 The `0.1.0-alpha.2` working tree uses project/plan v2 and SQLite v3. Real Claude
-launches currently fail closed because managed hook exclusion cannot be verified
-before execution. Codex supports verified empty MCP grants; named grants stop.
+launches fail closed when admin or organization policy configures hooks, plugins or a
+policy helper; see [Claude managed policy](provider-compatibility/claude-isolation-investigation.md). Codex supports verified empty MCP grants; named grants stop.
 No model/provider fallback occurs. See the [implementation and migration record](reliability-implementation.md).
 
 ## Install the packaged product
@@ -30,8 +30,8 @@ easy-skills bootstrap --client codex
 
 Bootstrap checks prerequisites and authentication without model requests and previews
 skill installation. Review its full proposal, then repeat with `--apply-hash HASH`.
-Claude skills can be installed, but current real execution remains blocked by the
-isolation diagnostic. Existing skills get backups; modified
+Claude skills can be installed; `doctor` reports whether managed policy allows
+Claude execution. Existing skills get backups; modified
 files are retained by conservative uninstall. [Installation and removal](installation/README.md)
 
 The previous compiled release and checksums are available on

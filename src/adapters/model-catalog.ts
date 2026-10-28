@@ -82,3 +82,65 @@ export function readCodexModels(resolved: {command: string; prefix: string[]}, c
     });
   });
 }
+
+const ClaudeModels = z.array(z.object({value: z.string().min(1), resolvedModel: z.string().min(1).optional(), displayName: z.string().min(1),
+  description: z.string().optional(), supportsEffort: z.boolean().optional(), supportedEffortLevels: z.array(z.string()).max(32).optional()})).max(200);
+
+/**
+ * Metadata only: the official client's initialize control request reports the
+ * account's picker entries with exact resolved IDs. No prompt is sent, so no turn runs.
+ * Aliases are collapsed onto their resolved exact ID; models without effort levels are omitted.
+ */
+export function readClaudeModels(resolved: {command: string; prefix: string[]}, cwd: string, args: string[], timeoutMs = 30_000): Promise<ModelOption[]> {
+  return new Promise((resolve, reject) => {
+    const child = crossSpawn(resolved.command, [...resolved.prefix, ...args],
+      {cwd, env: childEnvironment('client'), shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe']});
+    const decoder = new StringDecoder('utf8'), requestId = 'easy-skills-models';
+    const input = child.stdin!, output = child.stdout!, errors = child.stderr!;
+    let pending = '', total = 0, result: ModelOption[] | undefined, failure: Error | undefined;
+    // The client keeps waiting for a prompt after initialize, so it is always terminated here.
+    const stop = (error?: Error) => {if (failure) return; if (error && !result) failure = error; input.end(); if (child.pid) void terminateTree(child.pid);};
+    const timeout = setTimeout(() => stop(new Error('Claude Code model discovery timed out. Check the official CLI installation and login, then retry.')), timeoutMs);
+    child.on('spawn', () => input.write(JSON.stringify({type: 'control_request', request_id: requestId, request: {subtype: 'initialize'}}) + '\n'));
+    input.on('error', () => {if (!result) stop(new Error('Claude Code model discovery connection closed unexpectedly'));});
+    errors.resume();
+    output.on('data', (bytes: Buffer) => {
+      if (failure || result) return;
+      total += bytes.length;
+      if (total > 4_194_304) {stop(new Error('Claude Code model discovery exceeded the response limit')); return;}
+      pending += decoder.write(bytes);
+      let boundary: number;
+      while ((boundary = pending.indexOf('\n')) >= 0) {
+        const line = pending.slice(0, boundary).trim(); pending = pending.slice(boundary + 1);
+        if (!line) continue;
+        try {
+          const event = JSON.parse(line);
+          if (event.type !== 'control_response' || event.response?.request_id !== requestId) continue;
+          if (event.response.subtype !== 'success') throw new Error('Claude Code could not list models. Check official CLI login and update the client, then retry.');
+          const entries = ClaudeModels.parse(event.response.response?.models);
+          const models: ModelOption[] = [];
+          const defaultModel = entries.find(entry => entry.value === 'default')?.resolvedModel;
+          for (const entry of entries) {
+            const exact = entry.resolvedModel || entry.value;
+            if (!entry.supportsEffort || !entry.supportedEffortLevels?.length || models.some(existing => existing.model === exact)) continue;
+            const parsed = Assignment.safeParse({provider: 'claude-code', model: exact});
+            if (!parsed.success) continue;
+            const named = entries.find(other => other.value !== 'default' && (other.resolvedModel || other.value) === exact) || entry;
+            const displayName = named.displayName.replace(/[\u0000-\u001f\u007f-\u009f]/g, '').trim().slice(0, 200) || exact;
+            const efforts = [...new Set(entry.supportedEffortLevels)].map(level => ({value: Assignment.parse({provider: 'claude-code', model: exact, effort: level}).effort!, description: ''}));
+            models.push({model: parsed.data.model, displayName, isDefault: exact === defaultModel, efforts});
+          }
+          if (!models.length) throw new Error('Claude Code returned no selectable models. Sign in using claude auth login and retry.');
+          result = models; clearTimeout(timeout); stop();
+        } catch (error) {stop(error instanceof Error ? error : new Error('Invalid Claude Code model discovery response')); return;}
+        if (result) break;
+      }
+    });
+    child.on('error', () => {clearTimeout(timeout); reject(new Error('Could not start Claude Code model discovery. Check the CLI installation.'));});
+    child.on('close', code => {
+      clearTimeout(timeout);
+      if (result && !failure) resolve(result);
+      else reject(failure || new Error(`Claude Code model discovery ended before returning a catalog (exit ${code}). Update the official CLI and retry.`));
+    });
+  });
+}

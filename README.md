@@ -26,9 +26,9 @@ API key.
 
 > [!IMPORTANT]
 > **Development alpha — `0.1.0-alpha.2`.** The guided journey is covered by local
-> fixtures; live Codex/GitHub acceptance is still pending. Real Claude Code execution
-> remains blocked until managed-hook isolation can be verified. No provider or model
-> is silently substituted. Published alpha.1 assets predate this guided workflow.
+> fixtures; live Codex/GitHub acceptance is still pending. Claude Code runs when no
+> admin or organization policy configures hooks, plugins or a policy helper; otherwise
+> its launch is refused with the reason. No provider or model is silently substituted. Published alpha.1 assets predate this guided workflow.
 
 ## ✨ What you get
 
@@ -176,11 +176,11 @@ easy-skills run 909 --refine "Preserve selection behavior and normalize spaces"
 
 Save a named profile such as **Fast**, **Balanced**, or **High Quality**. A profile
 is simply a name for saved settings; press Enter to use **Balanced** if you are unsure.
-Easy Skills loads the current catalog from your official Codex CLI and lets you
-choose a model by number. You do not need to know or type its technical ID.
-Provider prompts also use a numbered list. Claude Code is shown as unavailable until
-its managed-hook isolation can be verified; selecting an unavailable provider explains
-the limitation and asks again. Login and model access are checked after selection.
+Easy Skills loads the current catalog from your official Codex CLI or Claude Code and
+lets you choose a model and reasoning effort by number. You do not need to know or type
+its technical ID. Provider prompts also use a numbered list. Claude Code is shown as
+unavailable when it is missing, signed out, or managed policy configures hooks, plugins
+or a policy helper; selecting an unavailable provider explains why and asks again. Login and model access are checked after selection.
 
 For example (the actual list depends on your installed client and account):
 

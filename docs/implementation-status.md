@@ -5,8 +5,8 @@ Do not equate a built package or simulated acceptance run with release readiness
 
 Current working version: **0.1.0-alpha.2**, project/plan contract v2, SQLite schema v3.
 See the [finding ledger, migration notes and current validation](reliability-implementation.md).
-Real Claude launches are deliberately refused pending enforceable managed-hook
-isolation. Codex supports verified empty MCP grants; named grants are unsupported.
+Real Claude launches are refused when managed policy configures hooks, plugins, a
+policy helper or MCP servers. Codex supports verified empty MCP grants; named grants are unsupported.
 The table below describes the earlier alpha foundation; current limits in the ledger
 take precedence. No new live-provider or GitHub mutation acceptance is claimed.
 

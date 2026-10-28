@@ -41,7 +41,10 @@ test('adapter commands preserve exact model and session, use stdin and no bare o
   assert.ok(effort.args.indexOf('model_reasoning_effort="high"') < effort.args.indexOf('exec'));
   assert.ok(invocation({provider: 'codex', model: 'exact-id', effort: 'ultra'}).args.includes('model_reasoning_effort="ultra"'));
   assert.equal(Assignment.safeParse({provider: 'codex', model: 'exact-id', effort: 'high"; bad'}).success, false);
-  assert.equal(Assignment.safeParse({provider: 'claude-code', model: 'exact-id', effort: 'high'}).success, false);
+  assert.equal(Assignment.safeParse({provider: 'claude-code', model: 'exact-id', effort: 'high'}).success, true);
+  const claudeEffort = invocation({provider: 'claude-code', model: 'exact-id', effort: 'xhigh'}).args;
+  assert.equal(claudeEffort[claudeEffort.indexOf('--effort') + 1], 'xhigh');
+  assert.ok(!invocation({provider: 'claude-code', model: 'exact-id'}).args.includes('--effort'));
   assert.equal(decode('codex', '{"type":"thread.started","thread_id":"s1"}').session, 's1');
   assert.equal(decode('claude-code', '{"type":"system","subtype":"init","session_id":"s2"}').session, 's2');
   assert.equal(decode('claude-code', JSON.stringify({type: 'result', subtype: 'success', is_error: false, structured_output: {outcome: 'passed', summary: 'ok', findings: []}})).result?.outcome, 'passed');

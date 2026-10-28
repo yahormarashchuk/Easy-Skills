@@ -138,6 +138,8 @@ queue membership and PR outcome are distinct. Terminal/ambiguous requests never 
 blind resubmission. Historical merged outcomes use saved authorization/evidence;
 new operations require current rules and exact revision approval.
 
-Real Claude execution is refused pending enforceable managed-hook isolation. Codex
-launches verify effective empty MCP grants and disabled hooks/apps. These controls
+Claude launches use safe mode, no setting sources and `disableAllHooks`, and are
+refused before and after each run when a managed source configures hooks, plugins, a
+policy helper or MCP servers. Codex launches verify effective empty MCP grants and
+disabled hooks/apps. These controls
 do not establish absolute host isolation. Fresh real-provider acceptance is outstanding.
