@@ -113,7 +113,9 @@ leaf-only override failed to parse its transport, and was corrected before use.
 Every actual launch rechecks its effective configuration. Named Codex MCP grants
 remain unsupported and stop explicitly.
 
-Real Claude launches are disabled. The official safe-mode description preserves
+Update: Claude launches are now gated on managed policy instead of always refused;
+see [Claude managed policy](provider-compatibility/claude-isolation-investigation.md).
+The earlier record follows. The official safe-mode description preserves
 managed hooks; neither inspecting local files nor checking tools after initialization
 proves their exclusion before a SessionStart hook. `doctor` reports installation and
 authentication separately from `isolation: false`. There is no bypass switch or
