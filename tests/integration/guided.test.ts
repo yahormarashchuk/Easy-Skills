@@ -98,6 +98,34 @@ test('onboarding remembers answers, preserves instructions and versions approved
   } finally {await f.dispose();}
 });
 
+test('interview progress is shown live and closed even when the client fails', async () => {
+  const f = await setup();
+  try {
+    rmSync(join(f.root, '.easy-skills/decisions/onboarding.json'));
+    const views: {title: string; steps: string[]; ok?: boolean}[] = [];
+    Object.assign(f.ui, {activity(title: string) {
+      const view: {title: string; steps: string[]; ok?: boolean} = {title, steps: []}; views.push(view);
+      return {update: (text: string) => view.steps.push(text), done: (ok: boolean) => {view.ok = ok;}};
+    }});
+    let fail = true;
+    const client: Client = {...f.client, async run(a, prompt, options) {
+      if (!prompt.includes('Investigate this project progressively')) return f.client.run(a, prompt, options);
+      options.onLine?.(JSON.stringify({type: 'turn.started'}));
+      options.onLine?.(JSON.stringify({type: 'item.started', item: {type: 'command_execution', command: "bash -lc 'git ls-files'"}}));
+      options.onLine?.('not json');
+      if (fail) {fail = false; throw new ClientError('network', 'Connection interrupted');}
+      options.onSession?.('project-interview');
+      return {outcome: 'passed', summary: JSON.stringify({summary: 'Use existing conventions.', questions: [],
+        rules: [{text: 'Preserve existing boundaries.', evidence: ['AGENTS.md']}], conflicts: [], project: f.project}), findings: []};
+    }};
+    const wizard = new Guided(f.store, f.ui, {client, github: f.github, testRemote: f.remote});
+    await assert.rejects(wizard.onboard(f.root, f.profile), /Connection interrupted/);
+    await wizard.onboard(f.root, f.profile);
+    assert.deepEqual(views.map(v => [v.title, v.ok]), [['DEFINE', false], ['DEFINE', true]]);
+    assert.deepEqual(views[1]!.steps, ['Thinking', 'Running git ls-files']);
+  } finally {await f.dispose();}
+});
+
 test('saved profiles retain every exact assignment and Claude isolation fails closed without fallback', async () => {
   const f = await setup();
   try {

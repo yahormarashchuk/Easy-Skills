@@ -2,12 +2,13 @@ import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import { readFileSync } from 'node:fs';
 import { z } from 'zod';
-import type { Interaction } from '../runner/guided.js';
+import type { Activity, Interaction } from '../runner/guided.js';
 import { redact } from '../util.js';
 import { resolveChoice, type Choice } from './choices.js';
 import { Provider } from '../contracts.js';
-import { interviewQuestion, stageBanner, useColor } from './presentation.js';
-import type { Stage } from '../contracts.js';
+import { interviewQuestion, stageBanner, stageColor, useColor, useUnicode } from './presentation.js';
+import { ActivityView } from './activity.js';
+import type { Assignment, Stage } from '../contracts.js';
 import type { ProviderOption } from '../adapters/index.js';
 
 const Script = z.record(z.string(), z.union([z.string(), z.boolean()]));
@@ -16,11 +17,20 @@ export class TerminalInteraction implements Interaction {
   private answers?: z.infer<typeof Script>;
   private terminal?: ReturnType<typeof createInterface>;
   private interviewCount = 0;
+  private view?: ActivityView;
   constructor(readonly options: {answers?: string; nonInteractive?: boolean} = {}) {
     if (options.answers) this.answers = Script.parse(JSON.parse(readFileSync(options.answers, 'utf8')));
   }
-  say(text: string) {stdout.write(redact(text) + '\n\n');}
-  stage(stage: Stage, context: 'model' | 'current') {this.say(stageBanner(stage, context, !this.answers && !this.options.nonInteractive && useColor(stdout.isTTY)));}
+  private get live() {return !this.answers && !this.options.nonInteractive && !!stdout.isTTY;}
+  say(text: string) {this.view?.erase(); stdout.write(redact(text) + '\n\n');}
+  stage(stage: Stage, context: 'model' | 'current') {this.say(stageBanner(stage, context, this.live && useColor(stdout.isTTY), this.live && useUnicode()));}
+  /** Scripted and redirected output stays a plain transcript; only an interactive terminal is redrawn. */
+  activity(title: string, assignment: Assignment): Activity {
+    if (!this.live) return {update() {}, done() {}};
+    this.view?.done(false);
+    const view = this.view = new ActivityView(stdout, title, assignment, {color: useColor(stdout.isTTY), unicode: useUnicode(), tone: stageColor(title)});
+    return {update: text => view.update(redact(text)), done: ok => {view.done(ok); if (this.view === view) this.view = undefined;}};
+  }
   private async input(id: string, question: string, fallback?: string) {
     if (this.answers && id in this.answers) return this.answers[id]!;
     if (this.options.nonInteractive || this.answers || !stdin.isTTY || !stdout.isTTY)
