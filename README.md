@@ -27,7 +27,7 @@ API key.
 > [!IMPORTANT]
 > **Development alpha — `0.1.0-alpha.2`.** The guided journey is covered by local
 > fixtures; live Codex/GitHub acceptance is still pending. Claude Code runs when no
-> admin or organization policy configures hooks, plugins or a policy helper; otherwise
+> admin or organization policy configures hooks, plugins, a policy helper or extra allow rules; otherwise
 > its launch is refused with the reason. No provider or model is silently substituted. Published alpha.1 assets predate this guided workflow.
 
 ## ✨ What you get
@@ -218,9 +218,9 @@ Saved profiles avoid re-entering all six assignments for each task. Availability
 authentication, and compatibility are checked. Compatibility probes request consent
 before using account quota and validate exact-session continuation.
 
-**Use an all-Codex profile for the initial pilot.** Claude Code assignments can be
-saved, but real launches currently stop with an isolation diagnostic. Explicitly
-choose another supported configuration when necessary; there is no silent fallback.
+**Codex and Claude Code can both be used.** Claude Code launches stop with a diagnostic
+only when an administrator or organization policy configures hooks, plugins, a policy
+helper or extra allow rules. Explicitly choose another configuration when that happens; there is no silent fallback.
 
 ## 🔄 Resume work and request changes
 

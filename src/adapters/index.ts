@@ -7,7 +7,7 @@ import { join, dirname } from 'node:path';
 import { assignmentMcp } from './mcp-permissions.js';
 import { clientCommand, childEnvironment } from '../execution.js';
 import { readClaudeModels, readCodexModels, type ModelOption } from './model-catalog.js';
-import { inspectClaudePolicy, readClaudeAccount, type PolicySources } from './claude-policy.js';
+import { claudeAccount, inspectClaudePolicy, readClaudeAccount, type ClaudeAccount, type PolicySources } from './claude-policy.js';
 
 export type ErrorKind = 'quota' | 'auth' | 'network' | 'model' | 'failure' | 'protocol' | 'refusal' | 'prerequisite' | 'review_input' | 'waiting_ci' | 'waiting_merge';
 export class ClientError extends Error {
@@ -162,14 +162,14 @@ export class CliClient implements Client {
       },
     });
     if (assignment.provider === 'codex' && existsSync(lastMessagePath)) result = parseResult(readFileSync(lastMessagePath, 'utf8'));
-    // Organization policy can be refreshed during a session; never accept work produced after hooks appeared.
-    if (assignment.provider === 'claude-code' && this.runner === execute) await restrictClaude(clientCommand('claude-code', options.cwd), options.cwd);
     } finally {rmSync(temp, {recursive: true, force: true});}
     if (error || response.code !== 0 || response.timedOut) {
       const detail = error || response.stderr || response.stdout || (response.timedOut ? 'Client timed out' : 'Client exited without result');
       throw new ClientError(kind || (/Corrupt JSON/.test(detail) ? 'protocol' : classify(detail)), detail, retryAt);
     }
     if (!complete || !result) throw new ClientError('protocol', 'Client exited without a validated structured final result; possible refusal or unsupported CLI protocol');
+    // Organization policy can be refreshed during a session; never accept work produced after hooks appeared.
+    if (assignment.provider === 'claude-code' && this.runner === execute) await restrictClaude(clientCommand('claude-code', options.cwd), options.cwd);
     return result;
   }
   async diagnose(assignment: Assignment, cwd: string): Promise<Diagnostic> {
@@ -178,14 +178,15 @@ export class CliClient implements Client {
       const version = await execute({command, args: [...resolved.prefix, '--version']}, {cwd, role: 'client', timeoutMs: 15_000});
       if (version.code !== 0) return {installed: false, authenticated: false, detail: version.stderr};
       const auth = await execute({command, args: [...resolved.prefix, ...(assignment.provider === 'codex' ? ['login', 'status'] : ['auth', 'status', '--json'])]}, {cwd, role: 'client', timeoutMs: 15_000});
-      let authenticated = auth.code === 0;
-      if (assignment.provider === 'claude-code' && authenticated) {
-        try {authenticated = JSON.parse(auth.stdout).loggedIn === true;} catch {authenticated = false;}
-      }
-      let isolation = false, detail: string | undefined;
+      const account = assignment.provider === 'claude-code' ? claudeAccount(auth.code, auth.stdout) : undefined;
+      const authenticated = account ? account.loggedIn : auth.code === 0;
+      let isolation: boolean | undefined = false, detail: string | undefined;
       try {
-        if (assignment.provider === 'claude-code') await restrictClaude(resolved, cwd); else await restrictCodex(resolved, cwd);
-        isolation = true;
+        if (account) {
+          // A signed-out client has no policy to inspect yet; report that through authenticated, not isolation.
+          if (account.loggedIn) await restrictClaude(resolved, cwd, execute, undefined, account); else isolation = undefined;
+        } else await restrictCodex(resolved, cwd);
+        if (isolation !== undefined) isolation = true;
       } catch (error) {detail = (error as Error).message;}
       return {installed: true, authenticated, isolation, detail, executable: command, version: (version.stdout || version.stderr).trim()};
     } catch (e) {return {installed: false, authenticated: false, detail: (e as Error).message};}
@@ -215,10 +216,11 @@ const CLAUDE_BASE_ARGS = ['--safe-mode', '--setting-sources', ''];
 /**
  * --safe-mode, empty setting sources and disableAllHooks exclude user, project and plugin
  * hooks, but managed policy still applies. Refuse unless no managed source configures
- * hooks, plugins or a policy helper. Checked before and after every launch.
+ * hooks, plugins, a policy helper or extra allowed permissions. Checked before and after
+ * every launch; a caller that already read the account status can pass it to avoid a repeat.
  */
-export async function restrictClaude(resolved: {command: string; prefix: string[]}, cwd: string, runner = execute, sources?: PolicySources): Promise<void> {
-  const account = await readClaudeAccount(resolved, cwd, runner);
+export async function restrictClaude(resolved: {command: string; prefix: string[]}, cwd: string, runner = execute, sources?: PolicySources, known?: ClaudeAccount): Promise<void> {
+  const account = known || await readClaudeAccount(resolved, cwd, runner);
   if (!account.loggedIn) throw new ClientError('auth', 'Sign in with claude auth login before using Claude Code');
   const refusal = await inspectClaudePolicy(account, sources);
   if (refusal) throw new ClientError('prerequisite', 'Claude Code launch refused: ' + refusal + ' No provider fallback is allowed.');

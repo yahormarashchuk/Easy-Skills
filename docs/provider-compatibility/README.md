@@ -14,7 +14,7 @@ have fixture coverage. Claude discovery uses the client's `initialize` metadata 
 
 **Alpha.2:** the adapter execution policy changed, so these historical model probes
 do not authorize current execution. Real Claude launches are refused when managed
-policy configures hooks, plugins or a policy helper. Codex's configuration-only empty
+policy configures hooks, plugins, a policy helper or extra allow rules. Codex's configuration-only empty
 MCP/hook restriction check passed locally on 2026-10-22; no revised model launch/resume
 probe was performed. See [the current implementation record](../reliability-implementation.md).
 
