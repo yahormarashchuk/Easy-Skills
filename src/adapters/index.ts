@@ -6,6 +6,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { assignmentMcp } from './mcp-permissions.js';
 import { clientCommand, childEnvironment } from '../execution.js';
+import { readCodexModels, type ModelOption } from './model-catalog.js';
 
 export type ErrorKind = 'quota' | 'auth' | 'network' | 'model' | 'failure' | 'protocol' | 'refusal' | 'prerequisite' | 'review_input' | 'waiting_ci' | 'waiting_merge';
 export class ClientError extends Error {
@@ -87,6 +88,7 @@ function parseResult(text: unknown): StageResult | undefined {
   } catch {return undefined;}
 }
 export interface Client {
+  listModels?(provider: Assignment['provider'], cwd: string): Promise<ModelOption[]>;
   diagnose?(assignment: Assignment, cwd: string): Promise<Diagnostic>;
   run(assignment: Assignment, prompt: string, options: ProcessOptions & {
     session?: string; mode?: 'read' | 'write'; stage?: Stage; projectRoot?: string; capabilities?: Capabilities; onSession?: (session: string) => void;
@@ -94,6 +96,15 @@ export interface Client {
 }
 export class CliClient implements Client {
   constructor(readonly runner: typeof execute = execute) {}
+  async listModels(provider: Assignment['provider'], cwd: string): Promise<ModelOption[]> {
+    if (provider === 'claude-code') throw new ClientError('prerequisite', CLAUDE_ISOLATION_LIMIT + ' Select Codex explicitly to use the model picker.');
+    if (this.runner !== execute) throw new Error('Injected clients must supply their own model catalog; real model discovery was not launched');
+    const resolved = clientCommand(provider, cwd);
+    const auth = await execute({command: resolved.command, args: [...resolved.prefix, 'login', 'status']}, {cwd, role: 'client', timeoutMs: 15_000});
+    if (auth.code !== 0) throw new ClientError('auth', 'Sign in with codex login before choosing a model');
+    const restrictions = await restrictCodex(resolved, cwd);
+    return readCodexModels(resolved, cwd, restrictions);
+  }
   async run(assignment: Assignment, prompt: string, options: ProcessOptions & {
     session?: string; mode?: 'read' | 'write'; stage?: Stage; projectRoot?: string; capabilities?: Capabilities; onSession?: (session: string) => void;
   }): Promise<StageResult> {

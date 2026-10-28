@@ -12,6 +12,9 @@ Use `easy-skills revise ISSUE_NUMBER "feedback"` to review a replacement approva
 update that same branch/PR. Keep exact assignments and the Claude isolation restriction.
 
 The following procedure remains available for advanced multi-task features.
+For ordinary terminal model selection, use the numbered current-client catalog in
+`config` or the task wizard. Store its exact IDs without inventing aliases. Scripted
+profiles retain explicit IDs so reordered catalogs cannot change their assignment.
 Read [the workflow contract](references/workflow.md). Read project context and current
 code in the affected area. Accept prose, an Issue or a document; inspect provided
 screenshots as additional requirements. Flag a stale project map.

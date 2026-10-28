@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { z } from 'zod';
 import type { Interaction } from '../runner/guided.js';
 import { redact } from '../util.js';
+import { resolveChoice, type Choice } from './choices.js';
 
 const Script = z.record(z.string(), z.union([z.string(), z.boolean()]));
 /** Missing scripted consent is always an error, never an implicit yes. */
@@ -26,6 +27,18 @@ export class TerminalInteraction implements Interaction {
     if (typeof answer !== 'string') throw new Error('Expected text for ' + id);
     if (!answer && !fallback) throw new Error('A value is required for ' + id);
     return answer || fallback!;
+  }
+  async select(id: string, question: string, choices: Choice[], fallback?: string) {
+    if (!choices.length) throw new Error('No models are available to select');
+    const scripted = !!this.answers || !!this.options.nonInteractive;
+    const defaultIndex = choices.findIndex(choice => choice.value === fallback);
+    this.say(question + '\n' + choices.map((choice, index) => `  ${index + 1}. ${choice.label}${index === defaultIndex ? ' [default]' : ''}`).join('\n'));
+    while (true) {
+      const answer = await this.input(id, `Choose a model by number (1-${choices.length})`, !scripted && defaultIndex >= 0 ? String(defaultIndex + 1) : undefined);
+      if (typeof answer !== 'string') throw new Error('Expected a model selection for ' + id);
+      try {return resolveChoice(answer, choices, scripted ? undefined : fallback, !scripted);}
+      catch (error) {if (scripted) throw error; this.say((error as Error).message);}
+    }
   }
   async confirm(id: string, question: string, binding?: string) {
     if (binding && (this.answers || this.options.nonInteractive)) {

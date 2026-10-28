@@ -84,7 +84,7 @@ easy-skills init
 ```
 
 Easy Skills inventories maintained instructions, manifests, docs, skills, and code
-examples. Choose an exact model profile, answer the unresolved questions, and review
+examples. Choose a model from a numbered list, answer the unresolved questions, and review
 the proposed rules, setup commands, and required checks before saving them.
 
 Discovery does not execute project tests or change application code. Existing
@@ -174,9 +174,25 @@ easy-skills run 909 --refine "Preserve selection behavior and normalize spaces"
 
 ## 🎛️ Choose your models
 
-Save a named profile such as **Fast**, **Balanced**, or **High Quality**, using the
-exact model IDs available in your official clients. These are your profile names;
-Easy Skills does not invent provider-specific model IDs.
+Save a named profile such as **Fast**, **Balanced**, or **High Quality**. A profile
+is simply a name for saved settings; press Enter to use **Balanced** if you are unsure.
+Easy Skills loads the current catalog from your official Codex CLI and lets you
+choose a model by number. You do not need to know or type its technical ID.
+
+For example (the actual list depends on your installed client and account):
+
+```text
+Choose a model from codex
+  1. GPT-6.1-Sol [default]
+  2. GPT-6.1 Terra
+  3. GPT-6-Astra
+Choose a model by number (1-3) [1]: 2
+```
+
+The selected model's exact ID is saved automatically. The same numbered selection
+is available when assigning individual stages. Catalog discovery runs no AI task;
+account access is checked separately before use. An unavailable saved model requires
+an explicit replacement rather than an automatic fallback.
 
 | Stage | Responsibility | Assignment |
 | --- | --- | --- |

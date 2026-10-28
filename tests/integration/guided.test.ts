@@ -115,6 +115,41 @@ test('saved profiles retain every exact assignment and Claude isolation fails cl
   } finally {await f.dispose();}
 });
 
+test('new profiles select current client models by number and preserve per-stage exact assignments', async () => {
+  const f = await setup();
+  try {
+    let calls = 0;
+    f.client.listModels = async provider => {
+      assert.equal(provider, 'codex'); calls++;
+      return [{model: 'catalog-model-b', displayName: 'Model B', isDefault: true}, {model: 'catalog-model-a', displayName: 'Model A', isDefault: false}];
+    };
+    Object.assign(f.ui.values, {'profile:name': 'Numbered', 'profile:provider': 'codex', 'profile:model': '2'});
+    f.ui.denied.delete('profile:customize');
+    for (const stage of ['DEFINE', 'PLAN', 'BUILD', 'VERIFY', 'REVIEW', 'SHIP']) {
+      f.ui.values['profile:' + stage + ':provider'] = 'codex'; f.ui.values['profile:' + stage + ':model'] = stage === 'REVIEW' ? '1' : '2';
+    }
+    const profile = await f.wizard.profile(f.root);
+    assert.equal(calls, 1); assert.equal(profile.assignments.BUILD.model, 'catalog-model-a'); assert.equal(profile.assignments.REVIEW.model, 'catalog-model-b');
+    assert.ok(f.ui.messages.some(text => text.includes('1. Model B') && text.includes('2. Model A')));
+    const saved = await f.wizard.profile(f.root); assert.deepEqual(saved, profile); assert.equal(calls, 1);
+  } finally {await f.dispose();}
+});
+
+test('editing refreshes the catalog, requires an explicit replacement for an unavailable saved model and handles empty catalogs', async () => {
+  const f = await setup();
+  try {
+    await f.wizard.profile(f.root, true, f.profile);
+    let calls = 0;
+    f.client.listModels = async () => {calls++; return [{model: 'new-model', displayName: 'New current model', isDefault: true}];};
+    Object.assign(f.ui.values, {'profile:select': 'Fixture', 'profile:provider': 'codex', 'profile:model': '1'});
+    const updated = await f.wizard.profile(f.root, true);
+    assert.equal(updated.assignments.BUILD.model, 'new-model'); assert.equal(calls, 1);
+    assert.ok(f.ui.messages.some(text => text.includes('saved model is not in the current catalog')));
+    f.client.listModels = async () => [];
+    await assert.rejects(f.wizard.profile(f.root, true), /no selectable models/);
+  } finally {await f.dispose();}
+});
+
 test('onboarding refuses a rule citation when its tracked source has been deleted', async () => {
   const f = await setup();
   try {

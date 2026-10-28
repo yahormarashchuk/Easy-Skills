@@ -81,14 +81,19 @@ easy-skills config --profile-file profile.json --non-interactive --answers conse
 ```
 
 The profile contains `name` and six exact `assignments`; consent contains
-`{"profile:save": true}`. Copy model IDs from the installed official client.
+`{"profile:save": true}`. Interactive users select models from a numbered catalog
+reported by the installed official CLI. Scripted `profile:model` and per-stage model
+answers must use exact IDs from that catalog: menu numbers are deliberately rejected
+in scripts because catalog ordering can change. Importing an explicit profile remains
+available for advanced operation.
 
 | Prompt ID | Meaning |
 | --- | --- |
 | `profile:reuse` | Reuse displayed saved assignments |
-| `profile:name`, `profile:provider`, `profile:model` | Create an assignment profile |
+| `profile:name`, `profile:provider` | Name saved settings and choose the provider |
+| `profile:model` | Numbered model choice interactively; exact catalog ID in scripts |
 | `profile:customize` | Edit individual stages |
-| `profile:STAGE:provider`, `profile:STAGE:model` | Exact stage assignment |
+| `profile:STAGE:provider`, `profile:STAGE:model` | Provider and numbered stage model choice; exact catalog ID in scripts |
 | `model-requests` | Allow read-only interviews/planning using account quota |
 | `probe:PROVIDER:MODEL` | Allow launch/resume compatibility validation |
 | `interview:QUESTION_ID` | Answer a model-derived unresolved question |
@@ -113,6 +118,17 @@ Claude real execution remains blocked until managed-hook isolation can be verifi
 Saved assignments are preserved; replacement requires explicit profile editing.
 Probe identity includes executable, version and execution policy; authentication is
 rechecked. No direct API key is required.
+
+Model discovery uses the official Codex app-server `initialize` / `initialized`
+handshake and paginated `model/list`, with hooks, apps and MCP restrictions checked
+before launch. It requests no thread or inference turn and does not read credential
+stores. Hidden entries are excluded, display names are presented, and the returned
+`model` identity is stored unchanged. Each profile interaction refreshes the catalog;
+one interaction reuses its displayed provider list across the six stages. A catalog
+can be bundled or cached by the official client, so a listed entry is not proof of
+account entitlement. Existing compatibility probes still establish execution access.
+Discovery errors stop with a diagnostic; no built-in model-name table is substituted.
+See [the official model-list protocol](https://learn.chatgpt.com/docs/app-server#list-models-modellist).
 
 Complex dependent work still uses advanced feature commands; automatic selection of
 advanced mode is not implemented. Branch prefixes are not inferred from project

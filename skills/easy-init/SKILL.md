@@ -9,6 +9,10 @@ to approve readable rules and commands. Do not make the owner prepare configurat
 copy digests. It preserves instructions and sends no GitHub mutations. New task plans
 carry local approved context without requiring a setup PR merge.
 
+The terminal model picker loads the official client's model catalog and accepts a
+number. Do not ask ordinary users to guess model IDs. The selected exact identity is
+saved internally; compatibility probes still require separate consent.
+
 The following procedure remains available for advanced, skill-led onboarding.
 Read [the workflow contract](references/workflow.md). Start with `easy-skills inspect`.
 Use [the interview procedure](references/interview.md) to maintain unresolved decisions,

@@ -16,11 +16,14 @@ import { requireCompatibility } from './compatibility.js';
 import { loadProject } from '../cli/project.js';
 import { generatePlan } from './planning.js';
 import { Engine } from './engine.js';
+import { resolveChoice, type Choice } from '../cli/choices.js';
+import type { ModelOption } from '../adapters/model-catalog.js';
 
 export interface Interaction {
   say(text: string): void;
   ask(id: string, question: string, fallback?: string): Promise<string>;
   confirm(id: string, question: string, binding?: string): Promise<boolean>;
+  select?(id: string, question: string, choices: Choice[], fallback?: string): Promise<string>;
 }
 export const ModelProfile = z.object({name: z.string().min(1).max(60), assignments: Assignments}).strict();
 export type ModelProfile = z.infer<typeof ModelProfile>;
@@ -56,6 +59,7 @@ export class Guided {
     this.assertHome(root);
     const identity = await new Git(root).identity(), key = 'profiles:' + identity.commonDir;
     const saved = this.store.operation<z.infer<typeof Profiles>>(key);
+    const catalogs = new Map<Assignment['provider'], ModelOption[]>();
     let profile = supplied ? ModelProfile.parse(supplied) : saved?.profiles.find(p => p.name === saved.selected);
     if (profile && !edit && !supplied) {
       this.showProfile(profile);
@@ -74,20 +78,21 @@ export class Guided {
           }
         }
         const provider = await this.ui.ask('profile:provider', 'Default provider (codex or claude-code)', profile?.assignments.BUILD.provider || 'codex');
-        const model = await this.ui.ask('profile:model', 'Exact model ID from your official CLI', profile?.assignments.BUILD.model);
+        const model = await this.chooseModel(root, provider, 'profile:model', catalogs, profile?.assignments.BUILD.model);
         const assignment = Assignment.parse({provider, model});
         profile = {name: selected, assignments: Assignments.parse(Object.fromEntries(Stage.options.map(stage => [stage, assignment])))};
       } else {
+        this.ui.say('A profile is a name for your saved stage settings. Press Enter to use Balanced, or choose any name you like.');
         const name = await this.ui.ask('profile:name', 'Name for your model profile', 'Balanced');
         const provider = await this.ui.ask('profile:provider', 'Provider (codex or claude-code)', 'codex');
-        const model = await this.ui.ask('profile:model', 'Exact model ID from your official CLI');
+        const model = await this.chooseModel(root, provider, 'profile:model', catalogs);
         const assignment = Assignment.parse({provider, model});
         profile = {name, assignments: Assignments.parse(Object.fromEntries(Stage.options.map(stage => [stage, assignment])))};
       }
       if (await this.ui.confirm('profile:customize', 'Choose a different assignment for individual stages?')) {
         for (const stage of Stage.options) {
           const provider = await this.ui.ask('profile:' + stage + ':provider', stage + ' provider', profile.assignments[stage].provider);
-          const model = await this.ui.ask('profile:' + stage + ':model', stage + ' exact model ID', profile.assignments[stage].model);
+          const model = await this.chooseModel(root, provider, 'profile:' + stage + ':model', catalogs, profile.assignments[stage].model, stage);
           profile.assignments[stage] = Assignment.parse({provider, model});
         }
       }
@@ -100,6 +105,32 @@ export class Guided {
   }
   private showProfile(profile: ModelProfile) {
     this.ui.say('AI profile: ' + profile.name + '\n' + Stage.options.map(stage => `${stage.padEnd(7)} ${profile.assignments[stage].provider}  ${profile.assignments[stage].model}`).join('\n'));
+  }
+  private async chooseModel(root: string, inputProvider: string, id: string, catalogs: Map<Assignment['provider'], ModelOption[]>, current?: string, stage?: Stage) {
+    const provider = Assignment.parse({provider: inputProvider, model: 'catalog-only'}).provider;
+    let models = catalogs.get(provider);
+    if (!models) {
+      if (!this.client.listModels) throw new Error('This client cannot discover models. Use an official client with model discovery or import an explicit profile using config --profile-file.');
+      this.ui.say('Loading the current model catalog from ' + provider + '...');
+      models = await this.client.listModels(provider, root);
+      if (!models.length) throw new Error('The client returned no selectable models. Check its login and retry.');
+      for (const entry of models) Assignment.parse({provider, model: entry.model});
+      if (new Set(models.map(entry => entry.model)).size !== models.length) throw new Error('The client returned duplicate model identities');
+      catalogs.set(provider, models);
+    }
+    this.ui.say('These models are reported by your installed CLI. Account access is checked before use; listing models does not run an AI task.');
+    if (current && !models.some(entry => entry.model === current)) this.ui.say('The saved model is not in the current catalog: ' + current + '. Choose a replacement explicitly.');
+    const fallback = current ? models.find(entry => entry.model === current)?.model : models.find(entry => entry.isDefault)?.model;
+    const choices = models.map(entry => ({value: entry.model, label: entry.displayName + (models!.some(other => other.model !== entry.model && other.displayName === entry.displayName) ? ' (' + entry.model + ')' : '')}));
+    const question = (stage ? stage + ': ' : '') + 'Choose a model from ' + provider;
+    let selected: string;
+    if (this.ui.select) selected = await this.ui.select(id, question, choices, fallback);
+    else {
+      this.ui.say(question + '\n' + choices.map((choice, index) => `${index + 1}. ${choice.label}`).join('\n'));
+      selected = resolveChoice(await this.ui.ask(id, 'Choose a model by number', fallback), choices, fallback);
+    }
+    if (!models.some(entry => entry.model === selected)) throw new Error('The selected model is not in the displayed catalog');
+    return selected;
   }
   async compatibility(root: string, profile: ModelProfile) {
     if (!await this.ui.confirm('model-requests', 'Allow read-only AI interviews and planning with this profile using your official CLI account?'))
