@@ -17,13 +17,17 @@ Approved rules live in `.easy-skills/rules/approved-rules.md`; other existing ru
 remain in force. Configuration is `.easy-skills/project.yaml`. Source paths, owner
 answers and skill references are saved in `.easy-skills/context/knowledge.json`.
 The existing versioned onboarding agreement binds configuration and the complete
-rules hash. Inferred rules must cite existing repository paths. Relevance and content
+rules hash. Inferred rules must cite existing Git-tracked files; untracked and ignored
+files are not evidence. A reply with invalid evidence is discarded and the model is
+asked again with the rejected paths, so a rerun never replays it. Relevance and content
 quality still depend on the selected model and owner review.
 
 The external SQLite journal stores profiles, interview answers/sessions, discovery
 cache, approval history and recoverable knowledge-write intents. An approval intent
 precedes writes; recovery accepts only approved before/after content and refuses
 intervening edits. Backups remain. State must stay outside the repository.
+Onboarding answers are kept per repository root and requested update until the rules
+are approved; a repository change only discards the cached model reply.
 
 Direct plans carry approved project knowledge without copying it into the task branch.
 Protected checks validate the snapshot plus actual code/check controls. Guards reject

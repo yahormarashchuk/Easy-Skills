@@ -199,7 +199,7 @@ test('onboarding refuses a rule citation when its tracked source has been delete
   const f = await setup();
   try {
     rmSync(join(f.root, 'AGENTS.md'));
-    await assert.rejects(f.wizard.onboard(f.root, f.profile, 'Review current conventions.'), /existing repository path: AGENTS.md/);
+    await assert.rejects(f.wizard.onboard(f.root, f.profile, 'Review current conventions.'), /Invalid paths: AGENTS\.md/);
     assert.ok(!f.ui.confirmations.includes('rules:approve'));
     assert.equal(existsSync(join(f.root, 'AGENTS.md')), false);
   } finally {await f.dispose();}
@@ -393,6 +393,89 @@ test('onboarding resolves reported contradictions through the saved conversation
     await wizard.onboard(f.root, f.profile, 'Resolve maintained dependency conventions.');
     assert.ok(f.ui.questions.some(id => id.startsWith('interview:conflict-')));
     assert.equal(requireAgreement(f.root).version, 2);
+  } finally {await f.dispose();}
+});
+
+/** Replaces final-reply rule evidence while `cite()` returns paths; records every onboarding prompt. */
+function citing(f: Awaited<ReturnType<typeof setup>>, cite: () => string[] | undefined) {
+  const prompts: string[] = [];
+  const client: Client = {...f.client, async run(a, p, o) {
+    const result = await f.client.run(a, p, o);
+    if (!p.includes('Investigate this project progressively')) return result;
+    prompts.push(p);
+    const reply = JSON.parse(result.summary), paths = reply.questions.length ? undefined : cite();
+    if (paths) {reply.rules[0].evidence = paths; result.summary = JSON.stringify(reply);}
+    return result;
+  }};
+  return {prompts, wizard: new Guided(f.store, f.ui, {client, github: f.github})};
+}
+
+test('onboarding asks the model again when rule evidence cites untracked or ignored files', async () => {
+  const f = await setup();
+  try {
+    writeFileSync(join(f.root, '.gitignore'), 'node_modules/\n__pycache__/\n.agents/\n');
+    mkdirSync(join(f.root, '.agents/skills/build'), {recursive: true});
+    writeFileSync(join(f.root, '.agents/skills/build/SKILL.md'), 'Generated skill copy');
+    writeFileSync(join(f.root, 'install-notes.md'), 'Untracked notes');
+    let attempt = 0;
+    const {prompts, wizard} = citing(f, () => ++attempt === 1 ? ['AGENTS.md', 'install-notes.md', '.agents/skills/build/SKILL.md'] : undefined);
+    await wizard.onboard(f.root, f.profile, 'Review generated skill evidence.');
+    assert.match(prompts[0]!, /files ignored by Git, including generated copies, are never evidence/);
+    const retry = prompts.at(-1)!;
+    assert.match(retry, /previous reply was rejected.*Invalid paths: install-notes\.md, \.agents\/skills\/build\/SKILL\.md\n/);
+    assert.deepEqual(JSON.parse(readFileSync(join(f.root, '.easy-skills/context/knowledge.json'), 'utf8')).rules[0].evidence, ['AGENTS.md']);
+  } finally {await f.dispose();}
+});
+
+test('repeatedly invalid evidence lists every path, keeps answers and is never replayed without a model call', async () => {
+  const f = await setup();
+  try {
+    writeFileSync(join(f.root, 'install-notes.md'), 'Untracked notes');
+    let invalid = true;
+    const {prompts, wizard} = citing(f, () => invalid ? ['install-notes.md', 'missing.md'] : undefined);
+    const update = 'Review installer evidence.';
+    await assert.rejects(wizard.onboard(f.root, f.profile, update), (error: Error) =>
+      /Invalid paths: install-notes\.md, missing\.md/.test(error.message) && /git add/.test(error.message) && /Owner answers are saved/.test(error.message));
+    assert.ok(!f.ui.confirmations.includes('rules:approve'));
+    const key = 'onboarding:' + hash({root: f.root, update});
+    const saved = f.store.operation<{answers: Record<string, unknown>; reply?: unknown}>(key)!;
+    assert.ok(saved.answers.dependencies); assert.equal(saved.reply, undefined);
+    const calls = prompts.length; invalid = false;
+    await wizard.onboard(f.root, f.profile, update);
+    assert.equal(prompts.length, calls + 1); assert.match(prompts.at(-1)!, /previous reply was rejected.*install-notes\.md, missing\.md/);
+    assert.equal(f.ui.questions.filter(q => q === 'interview:dependencies').length, 1);
+    assert.equal(requireAgreement(f.root).version, 2);
+  } finally {await f.dispose();}
+});
+
+test('a saved reply with invalid evidence is validated before replay', async () => {
+  const f = await setup();
+  try {
+    const update = 'Replay a stored reply.', {fingerprint} = await discover(f.root, f.store);
+    const reply = {summary: 'Stored reply', questions: [], rules: [{text: 'Follow the installer.', evidence: ['install-notes.md']}], conflicts: [], project: f.project};
+    f.store.recordOperation('onboarding:' + hash({root: f.root, update}), 'fixture', 'interview.reply', {assignment: f.profile.assignments.DEFINE, answers: {}, fingerprint, reply});
+    const {prompts, wizard} = citing(f, () => undefined);
+    await wizard.onboard(f.root, f.profile, update);
+    assert.equal(prompts.length, 2); assert.match(prompts[0]!, /previous reply was rejected.*install-notes\.md/);
+    assert.equal(requireAgreement(f.root).version, 2);
+  } finally {await f.dispose();}
+});
+
+test('owner answers survive a repository fingerprint change during onboarding', async () => {
+  const f = await setup();
+  try {
+    const update = 'Track installer notes.', {prompts, wizard} = citing(f, () => undefined);
+    f.ui.denied.add('rules:approve');
+    await assert.rejects(wizard.onboard(f.root, f.profile, update), /not approved/);
+    const before = (await discover(f.root, f.store)).fingerprint, calls = prompts.length;
+    writeFileSync(join(f.root, 'install-notes.md'), 'Now tracked'); await f.git.run(['add', 'install-notes.md']);
+    assert.notEqual((await discover(f.root, f.store)).fingerprint, before);
+    f.ui.denied.delete('rules:approve');
+    await wizard.onboard(f.root, f.profile, update);
+    assert.equal(prompts.length, calls + 1, 'the reply cached for the old fingerprint is not replayed');
+    assert.match(prompts.at(-1)!, /already resolved[^\n]*\n[^\n]*"dependencies"/);
+    assert.equal(f.ui.questions.filter(q => q === 'interview:dependencies').length, 1);
+    assert.ok(JSON.parse(readFileSync(join(f.root, '.easy-skills/context/knowledge.json'), 'utf8')).answers.dependencies);
   } finally {await f.dispose();}
 });
 
