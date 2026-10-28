@@ -1,5 +1,8 @@
 # Client compatibility
 
+For the current blockers and acceptance criteria for enabling Claude Code, see the
+[Claude isolation investigation](claude-isolation-investigation.md).
+
 On 2026-10-27, native Windows / Node.js 24.22.0 / Codex CLI 0.163.0 returned eight
 picker-visible models through the official app-server initialization and paginated
 `model/list` path. Hooks/apps/MCP restrictions were verified before launching the
