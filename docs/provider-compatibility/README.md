@@ -1,5 +1,17 @@
 # Client compatibility
 
+For the current blockers and acceptance criteria for enabling Claude Code, see the
+[Claude isolation investigation](claude-isolation-investigation.md).
+
+On 2026-10-27, native Windows / Node.js 24.22.0 / Codex CLI 0.163.0 returned eight
+picker-visible models through the official app-server initialization and paginated
+`model/list` path. Hooks/apps/MCP restrictions were verified before launching the
+metadata process. No thread or inference turn was requested. This observation validates
+catalog discovery only; listing does not establish entitlement or authorize execution.
+The interactive picker stores the returned exact model ID after numeric selection.
+Hidden models, malformed/empty responses, repeated cursors and discovery failures
+have fixture coverage. Claude discovery/execution remains blocked by the isolation limit.
+
 **Alpha.2:** the adapter execution policy changed, so these historical model probes
 do not authorize current execution. Real Claude launches are refused because managed
 hook exclusion cannot be verified before execution. Codex's configuration-only empty

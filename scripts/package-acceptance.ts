@@ -79,5 +79,14 @@ try {
   }
   const readable = await execute({command: process.execPath, args: [cli, 'status', '909']}, {cwd: f.root, env: {EASY_SKILLS_HOME: store.home}});
   assert.equal(readable.code, 0, readable.stderr); assert.match(readable.stdout, /Task #909: ready/);
-  console.log(JSON.stringify({compiledFeature: 'merged', compiledDirectTask: 'ready', samePrFeedback: true, packagedSkills: true, compiledProtocol: true, realExternalActions: false}));
+  const picker = new compiled.Guided(store, {say(_text: string) {}, async ask(id: string, _question: string, fallback?: string) {
+    return id === 'profile:select' ? 'Numbered package profile' : id === 'profile:model' ? '2' : fallback || 'codex';
+  }, async confirm(id: string) {return id !== 'profile:customize';}}, {client: {...f.client, async listModels() {
+    const efforts = [{value: 'medium', description: 'Balanced'}, {value: 'high', description: 'Thorough'}];
+    return [{model: 'package-model-one', displayName: 'First package model', isDefault: true, efforts, defaultEffort: 'medium'}, {model: 'package-model-two', displayName: 'Second package model', isDefault: false, efforts, defaultEffort: 'medium'}];
+  }}});
+  const selected = await picker.profile(f.root, true);
+  assert.equal(selected.assignments.BUILD.model, 'package-model-two'); assert.equal(selected.assignments.REVIEW.model, 'package-model-two');
+  assert.equal(selected.assignments.BUILD.effort, 'medium');
+  console.log(JSON.stringify({compiledFeature: 'merged', compiledDirectTask: 'ready', samePrFeedback: true, numberedModelSelection: true, packagedSkills: true, compiledProtocol: true, realExternalActions: false}));
 } finally {store.close(); await f.dispose();}

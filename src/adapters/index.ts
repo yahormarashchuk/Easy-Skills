@@ -6,6 +6,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { assignmentMcp } from './mcp-permissions.js';
 import { clientCommand, childEnvironment } from '../execution.js';
+import { readCodexModels, type ModelOption } from './model-catalog.js';
 
 export type ErrorKind = 'quota' | 'auth' | 'network' | 'model' | 'failure' | 'protocol' | 'refusal' | 'prerequisite' | 'review_input' | 'waiting_ci' | 'waiting_merge';
 export class ClientError extends Error {
@@ -27,6 +28,7 @@ export function invocation(assignment: Assignment, session?: string, mode: 'read
     // Global sandbox and approval flags also apply to exec resume, whose local flags differ.
     const args = ['--ask-for-approval', 'never', '--sandbox', mode === 'read' ? 'read-only' : 'workspace-write', 'exec'];
     args.unshift(...(protocol.mcpOverrides || []).flatMap(override => ['--config', override]));
+    if (assignment.effort) args.unshift('--config', `model_reasoning_effort="${assignment.effort}"`);
     if (session) args.push('resume', session);
     if (protocol.schemaPath) args.push('--output-schema', protocol.schemaPath);
     if (protocol.lastMessagePath) args.push('--output-last-message', protocol.lastMessagePath);
@@ -87,13 +89,33 @@ function parseResult(text: unknown): StageResult | undefined {
   } catch {return undefined;}
 }
 export interface Client {
+  listProviders?(cwd: string): Promise<ProviderOption[]>;
+  listModels?(provider: Assignment['provider'], cwd: string): Promise<ModelOption[]>;
   diagnose?(assignment: Assignment, cwd: string): Promise<Diagnostic>;
   run(assignment: Assignment, prompt: string, options: ProcessOptions & {
     session?: string; mode?: 'read' | 'write'; stage?: Stage; projectRoot?: string; capabilities?: Capabilities; onSession?: (session: string) => void;
   }): Promise<StageResult>;
 }
+export interface ProviderOption {provider: Assignment['provider']; available: boolean; reason?: string}
 export class CliClient implements Client {
   constructor(readonly runner: typeof execute = execute) {}
+  async listProviders(cwd: string): Promise<ProviderOption[]> {
+    if (this.runner !== execute) throw new Error('Injected clients must supply their own provider availability');
+    let codex: ProviderOption;
+    try {clientCommand('codex', cwd); codex = {provider: 'codex', available: true};}
+    catch {codex = {provider: 'codex', available: false, reason: 'Official Codex CLI could not be found or verified. Install or configure it and retry.'};}
+    return [codex, {provider: 'claude-code', available: false,
+      reason: 'Claude Code is temporarily unavailable: managed hook isolation cannot yet be verified.'}];
+  }
+  async listModels(provider: Assignment['provider'], cwd: string): Promise<ModelOption[]> {
+    if (provider === 'claude-code') throw new ClientError('prerequisite', CLAUDE_ISOLATION_LIMIT + ' Select Codex explicitly to use the model picker.');
+    if (this.runner !== execute) throw new Error('Injected clients must supply their own model catalog; real model discovery was not launched');
+    const resolved = clientCommand(provider, cwd);
+    const auth = await execute({command: resolved.command, args: [...resolved.prefix, 'login', 'status']}, {cwd, role: 'client', timeoutMs: 15_000});
+    if (auth.code !== 0) throw new ClientError('auth', 'Sign in with codex login before choosing a model');
+    const restrictions = await restrictCodex(resolved, cwd);
+    return readCodexModels(resolved, cwd, restrictions);
+  }
   async run(assignment: Assignment, prompt: string, options: ProcessOptions & {
     session?: string; mode?: 'read' | 'write'; stage?: Stage; projectRoot?: string; capabilities?: Capabilities; onSession?: (session: string) => void;
   }): Promise<StageResult> {

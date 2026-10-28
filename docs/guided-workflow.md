@@ -81,16 +81,43 @@ easy-skills config --profile-file profile.json --non-interactive --answers conse
 ```
 
 The profile contains `name` and six exact `assignments`; consent contains
-`{"profile:save": true}`. Copy model IDs from the installed official client.
+`{"profile:save": true}`. Interactive users select models from a numbered catalog
+reported by the installed official CLI. Scripted `profile:model` and per-stage model
+answers must use exact IDs from that catalog: menu numbers are deliberately rejected
+in scripts because catalog ordering can change. Importing an explicit profile remains
+available for advanced operation.
+
+After selecting a model, choose a reasoning effort from the client's reported options.
+The model's advertised default is offered for new assignments; an unavailable saved
+effort needs an explicit replacement. Each stage stores its exact effort in the plan,
+approval and compatibility-probe identity. `doctor --provider codex --model MODEL
+--effort EFFORT --probe` validates that exact assignment. Existing assignments without
+an effort retain the CLI's implicit default and their existing approval/probe identity;
+edit the profile to pin one explicitly. Missing effort metadata stops with a diagnostic
+rather than inventing choices. Scripted answers use effort values, not menu numbers.
+
+Provider prompts show a numbered list; press Enter to keep the displayed available
+provider. The installed Codex executable is checked before displaying the menu; login
+and model access are checked separately. Claude Code is shown as unavailable until
+managed-hook isolation can be verified. An invalid or unavailable interactive choice
+is explained and the same question is asked again. Scripted provider answers use the
+exact ID (`codex` or `claude-code`) and fail clearly when invalid or unavailable.
+
+Stage banners show each model-setup position and explain its responsibility. DEFINE
+and PLAN are marked during the guided conversation; `easy-skills status` highlights
+the current execution stage. Color is used only in a supported interactive terminal
+and can be disabled with `NO_COLOR`; redirected output remains readable without it.
 
 | Prompt ID | Meaning |
 | --- | --- |
 | `profile:reuse` | Reuse displayed saved assignments |
-| `profile:name`, `profile:provider`, `profile:model` | Create an assignment profile |
+| `profile:name`, `profile:provider` | Name saved settings and choose the provider |
+| `profile:model` | Numbered model choice interactively; exact catalog ID in scripts |
+| `profile:effort`, `profile:STAGE:effort` | Numbered reasoning effort interactively; exact effort value in scripts |
 | `profile:customize` | Edit individual stages |
-| `profile:STAGE:provider`, `profile:STAGE:model` | Exact stage assignment |
+| `profile:STAGE:provider`, `profile:STAGE:model` | Provider and numbered stage model choice; exact catalog ID in scripts |
 | `model-requests` | Allow read-only interviews/planning using account quota |
-| `probe:PROVIDER:MODEL` | Allow launch/resume compatibility validation |
+| `probe:PROVIDER:MODEL[:EFFORT]` | Allow launch/resume validation for the exact assignment |
 | `interview:QUESTION_ID` | Answer a model-derived unresolved question |
 | `rules:approve` | Save displayed rules and commands |
 | `task:specification` | Continue planning with displayed requirements |
@@ -113,6 +140,17 @@ Claude real execution remains blocked until managed-hook isolation can be verifi
 Saved assignments are preserved; replacement requires explicit profile editing.
 Probe identity includes executable, version and execution policy; authentication is
 rechecked. No direct API key is required.
+
+Model discovery uses the official Codex app-server `initialize` / `initialized`
+handshake and paginated `model/list`, with hooks, apps and MCP restrictions checked
+before launch. It requests no thread or inference turn and does not read credential
+stores. Hidden entries are excluded, display names are presented, and the returned
+`model` identity and selected advertised reasoning effort are stored unchanged. Each profile interaction refreshes the catalog;
+one interaction reuses its displayed provider list across the six stages. A catalog
+can be bundled or cached by the official client, so a listed entry is not proof of
+account entitlement. Existing compatibility probes still establish execution access.
+Discovery errors stop with a diagnostic; no built-in model-name table is substituted.
+See [the official model-list protocol](https://learn.chatgpt.com/docs/app-server#list-models-modellist).
 
 Complex dependent work still uses advanced feature commands; automatic selection of
 advanced mode is not implemented. Branch prefixes are not inferred from project

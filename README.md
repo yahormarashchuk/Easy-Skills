@@ -84,7 +84,7 @@ easy-skills init
 ```
 
 Easy Skills inventories maintained instructions, manifests, docs, skills, and code
-examples. Choose an exact model profile, answer the unresolved questions, and review
+examples. Choose a model from a numbered list, answer the unresolved questions, and review
 the proposed rules, setup commands, and required checks before saving them.
 
 Discovery does not execute project tests or change application code. Existing
@@ -174,18 +174,41 @@ easy-skills run 909 --refine "Preserve selection behavior and normalize spaces"
 
 ## 🎛️ Choose your models
 
-Save a named profile such as **Fast**, **Balanced**, or **High Quality**, using the
-exact model IDs available in your official clients. These are your profile names;
-Easy Skills does not invent provider-specific model IDs.
+Save a named profile such as **Fast**, **Balanced**, or **High Quality**. A profile
+is simply a name for saved settings; press Enter to use **Balanced** if you are unsure.
+Easy Skills loads the current catalog from your official Codex CLI and lets you
+choose a model by number. You do not need to know or type its technical ID.
+Provider prompts also use a numbered list. Claude Code is shown as unavailable until
+its managed-hook isolation can be verified; selecting an unavailable provider explains
+the limitation and asks again. Login and model access are checked after selection.
+
+For example (the actual list depends on your installed client and account):
+
+```text
+Choose a model from codex
+  1. GPT-6.1-Sol [default]
+  2. GPT-6.1 Terra
+  3. GPT-6-Astra
+Choose a model by number (1-3) [1]: 2
+```
+
+After choosing a model, choose its reasoning effort from the numbered options reported
+by the client. Press Enter to use the model's advertised default. Effort controls how
+much reasoning the model can use; higher settings can take longer and use more quota.
+The selected model ID and effort are saved for each stage. Existing profiles without
+an effort retain the CLI's unpinned default until you edit them with `easy-skills config`.
+The same numbered selection is available when assigning individual stages. Catalog discovery runs no AI task;
+account access is checked separately before use. An unavailable saved model requires
+an explicit replacement rather than an automatic fallback.
 
 | Stage | Responsibility | Assignment |
 | --- | --- | --- |
-| DEFINE | Project and task interviews | Your exact provider/model pair |
-| PLAN | Technical implementation planning | Your exact provider/model pair |
-| BUILD | Implementation and corrective changes | Your exact provider/model pair |
-| VERIFY | Acceptance inspection alongside runner-executed checks | Your exact provider/model pair |
-| REVIEW | Separate review of the actual file diffs | Your exact provider/model pair |
-| SHIP | Delivery-readiness inspection before runner publication | Your exact provider/model pair |
+| DEFINE | Project and task interviews | Your provider, model, and effort |
+| PLAN | Technical implementation planning | Your provider, model, and effort |
+| BUILD | Implementation and corrective changes | Your provider, model, and effort |
+| VERIFY | Acceptance inspection alongside runner-executed checks | Your provider, model, and effort |
+| REVIEW | Separate review of the actual file diffs | Your provider, model, and effort |
+| SHIP | Delivery-readiness inspection before runner publication | Your provider, model, and effort |
 
 ```powershell
 easy-skills config

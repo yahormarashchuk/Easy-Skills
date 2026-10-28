@@ -32,6 +32,10 @@
               "minLength": 1,
               "maxLength": 150,
               "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$"
+            },
+            "effort": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{0,31}$"
             }
           },
           "required": [
@@ -55,6 +59,10 @@
               "minLength": 1,
               "maxLength": 150,
               "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$"
+            },
+            "effort": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{0,31}$"
             }
           },
           "required": [
@@ -78,6 +86,10 @@
               "minLength": 1,
               "maxLength": 150,
               "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$"
+            },
+            "effort": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{0,31}$"
             }
           },
           "required": [
@@ -101,6 +113,10 @@
               "minLength": 1,
               "maxLength": 150,
               "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$"
+            },
+            "effort": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{0,31}$"
             }
           },
           "required": [
@@ -124,6 +140,10 @@
               "minLength": 1,
               "maxLength": 150,
               "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$"
+            },
+            "effort": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{0,31}$"
             }
           },
           "required": [
@@ -147,6 +167,10 @@
               "minLength": 1,
               "maxLength": 150,
               "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$"
+            },
+            "effort": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{0,31}$"
             }
           },
           "required": [

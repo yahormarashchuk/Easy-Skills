@@ -3,8 +3,8 @@ import { existsSync, readFileSync, writeFileSync, copyFileSync, renameSync, real
 import { join, resolve, relative, isAbsolute } from 'node:path';
 import { z } from 'zod';
 import { stringify } from 'yaml';
-import { Assignments, Assignment, Plan, Project, Stage, type Run } from '../contracts.js';
-import { CliClient, type Client } from '../adapters/index.js';
+import { Assignments, Assignment, Plan, Project, Provider, Stage, type Run } from '../contracts.js';
+import { CliClient, type Client, type ProviderOption } from '../adapters/index.js';
 import { Gh, type GitHub, type Issue } from '../github/index.js';
 import { Git } from '../git/index.js';
 import { Store } from '../persistence/store.js';
@@ -16,11 +16,17 @@ import { requireCompatibility } from './compatibility.js';
 import { loadProject } from '../cli/project.js';
 import { generatePlan } from './planning.js';
 import { Engine } from './engine.js';
+import { resolveChoice, type Choice } from '../cli/choices.js';
+import type { ModelOption } from '../adapters/model-catalog.js';
+import { stageBanner } from '../cli/presentation.js';
 
 export interface Interaction {
   say(text: string): void;
   ask(id: string, question: string, fallback?: string): Promise<string>;
+  askProvider?(id: string, question: string, fallback: Assignment['provider'], options?: ProviderOption[]): Promise<Assignment['provider']>;
+  stage?(stage: Stage, context: 'model' | 'current'): void;
   confirm(id: string, question: string, binding?: string): Promise<boolean>;
+  select?(id: string, question: string, choices: Choice[], fallback?: string, kind?: 'model' | 'effort'): Promise<string>;
 }
 export const ModelProfile = z.object({name: z.string().min(1).max(60), assignments: Assignments}).strict();
 export type ModelProfile = z.infer<typeof ModelProfile>;
@@ -56,12 +62,14 @@ export class Guided {
     this.assertHome(root);
     const identity = await new Git(root).identity(), key = 'profiles:' + identity.commonDir;
     const saved = this.store.operation<z.infer<typeof Profiles>>(key);
+    const catalogs = new Map<Assignment['provider'], ModelOption[]>();
     let profile = supplied ? ModelProfile.parse(supplied) : saved?.profiles.find(p => p.name === saved.selected);
     if (profile && !edit && !supplied) {
       this.showProfile(profile);
       if (await this.ui.confirm('profile:reuse', 'Use this saved AI profile?')) return profile;
     }
     if (!supplied) {
+      const providers = this.ui.askProvider && this.client.listProviders ? await this.client.listProviders(root) : undefined;
       if (saved) {
         this.ui.say('Saved profiles: ' + saved.profiles.map(p => p.name).join(', '));
         const selected = await this.ui.ask('profile:select', 'Profile name to use or create', profile?.name || 'Balanced');
@@ -73,22 +81,28 @@ export class Guided {
             return profile;
           }
         }
-        const provider = await this.ui.ask('profile:provider', 'Default provider (codex or claude-code)', profile?.assignments.BUILD.provider || 'codex');
-        const model = await this.ui.ask('profile:model', 'Exact model ID from your official CLI', profile?.assignments.BUILD.model);
-        const assignment = Assignment.parse({provider, model});
+        const provider = await this.chooseProvider('profile:provider', 'Choose the default provider', profile?.assignments.BUILD.provider || 'codex', providers);
+        const model = await this.chooseModel(root, provider, 'profile:model', catalogs, profile?.assignments.BUILD.model);
+        const effort = await this.chooseEffort(provider, model, 'profile:effort', catalogs, profile?.assignments.BUILD.model === model && profile.assignments.BUILD.provider === provider ? profile.assignments.BUILD.effort : undefined);
+        const assignment = Assignment.parse({provider, model, effort});
         profile = {name: selected, assignments: Assignments.parse(Object.fromEntries(Stage.options.map(stage => [stage, assignment])))};
       } else {
+        this.ui.say('A profile is a name for your saved stage settings. Press Enter to use Balanced, or choose any name you like.');
         const name = await this.ui.ask('profile:name', 'Name for your model profile', 'Balanced');
-        const provider = await this.ui.ask('profile:provider', 'Provider (codex or claude-code)', 'codex');
-        const model = await this.ui.ask('profile:model', 'Exact model ID from your official CLI');
-        const assignment = Assignment.parse({provider, model});
+        const provider = await this.chooseProvider('profile:provider', 'Choose a provider', 'codex', providers);
+        const model = await this.chooseModel(root, provider, 'profile:model', catalogs);
+        const effort = await this.chooseEffort(provider, model, 'profile:effort', catalogs);
+        const assignment = Assignment.parse({provider, model, effort});
         profile = {name, assignments: Assignments.parse(Object.fromEntries(Stage.options.map(stage => [stage, assignment])))};
       }
       if (await this.ui.confirm('profile:customize', 'Choose a different assignment for individual stages?')) {
         for (const stage of Stage.options) {
-          const provider = await this.ui.ask('profile:' + stage + ':provider', stage + ' provider', profile.assignments[stage].provider);
-          const model = await this.ui.ask('profile:' + stage + ':model', stage + ' exact model ID', profile.assignments[stage].model);
-          profile.assignments[stage] = Assignment.parse({provider, model});
+          this.showStage(stage, 'model');
+          const provider = await this.chooseProvider('profile:' + stage + ':provider', stage + ' provider', profile.assignments[stage].provider, providers);
+          const model = await this.chooseModel(root, provider, 'profile:' + stage + ':model', catalogs, profile.assignments[stage].model, stage);
+          const old = profile.assignments[stage];
+          const effort = await this.chooseEffort(provider, model, 'profile:' + stage + ':effort', catalogs, old.provider === provider && old.model === model ? old.effort : undefined, stage);
+          profile.assignments[stage] = Assignment.parse({provider, model, effort});
         }
       }
     }
@@ -99,7 +113,59 @@ export class Guided {
     return profile;
   }
   private showProfile(profile: ModelProfile) {
-    this.ui.say('AI profile: ' + profile.name + '\n' + Stage.options.map(stage => `${stage.padEnd(7)} ${profile.assignments[stage].provider}  ${profile.assignments[stage].model}`).join('\n'));
+    this.ui.say('AI profile: ' + profile.name + '\n' + Stage.options.map(stage => `${stage.padEnd(7)} ${profile.assignments[stage].provider}  ${profile.assignments[stage].model}  effort: ${profile.assignments[stage].effort || 'CLI default (not pinned)'}`).join('\n'));
+  }
+  private showStage(stage: Stage, context: 'model' | 'current') {
+    if (this.ui.stage) this.ui.stage(stage, context); else this.ui.say(stageBanner(stage, context));
+  }
+  private async chooseProvider(id: string, question: string, fallback: Assignment['provider'], options?: ProviderOption[]): Promise<Assignment['provider']> {
+    const value = this.ui.askProvider ? await this.ui.askProvider(id, question, fallback, options) : await this.ui.ask(id, question, fallback);
+    const result = Provider.safeParse(value);
+    if (!result.success) throw new Error(`Invalid provider for ${id}. Enter codex or claude-code.`);
+    if (options && !options.some(option => option.provider === result.data && option.available)) throw new Error(`Selected provider ${result.data} is unavailable; choose an available provider explicitly.`);
+    return result.data;
+  }
+  private async chooseModel(root: string, inputProvider: string, id: string, catalogs: Map<Assignment['provider'], ModelOption[]>, current?: string, stage?: Stage) {
+    const provider = Assignment.parse({provider: inputProvider, model: 'catalog-only'}).provider;
+    let models = catalogs.get(provider);
+    if (!models) {
+      if (!this.client.listModels) throw new Error('This client cannot discover models. Use an official client with model discovery or import an explicit profile using config --profile-file.');
+      this.ui.say('Loading the current model catalog from ' + provider + '...');
+      models = await this.client.listModels(provider, root);
+      if (!models.length) throw new Error('The client returned no selectable models. Check its login and retry.');
+      for (const entry of models) Assignment.parse({provider, model: entry.model});
+      if (new Set(models.map(entry => entry.model)).size !== models.length) throw new Error('The client returned duplicate model identities');
+      catalogs.set(provider, models);
+    }
+    this.ui.say('These models are reported by your installed CLI. Account access is checked before use; listing models does not run an AI task.');
+    if (current && !models.some(entry => entry.model === current)) this.ui.say('The saved model is not in the current catalog: ' + current + '. Choose a replacement explicitly.');
+    const fallback = current ? models.find(entry => entry.model === current)?.model : models.find(entry => entry.isDefault)?.model;
+    const choices = models.map(entry => ({value: entry.model, label: entry.displayName + (models!.some(other => other.model !== entry.model && other.displayName === entry.displayName) ? ' (' + entry.model + ')' : '')}));
+    const question = (stage ? stage + ': ' : '') + 'Choose a model from ' + provider;
+    let selected: string;
+    if (this.ui.select) selected = await this.ui.select(id, question, choices, fallback);
+    else {
+      this.ui.say(question + '\n' + choices.map((choice, index) => `${index + 1}. ${choice.label}`).join('\n'));
+      selected = resolveChoice(await this.ui.ask(id, 'Choose a model by number', fallback), choices, fallback);
+    }
+    if (!models.some(entry => entry.model === selected)) throw new Error('The selected model is not in the displayed catalog');
+    return selected;
+  }
+  private async chooseEffort(provider: Assignment['provider'], model: string, id: string, catalogs: Map<Assignment['provider'], ModelOption[]>, current?: string, stage?: Stage) {
+    const option = catalogs.get(provider)?.find(item => item.model === model);
+    if (!option?.efforts?.length) throw new Error(`The installed CLI did not report reasoning effort options for ${model}. Update the client or import an explicit legacy profile.`);
+    const choices = option.efforts.map(item => ({value: item.value, label: item.value + (item.description ? ' - ' + item.description : '')}));
+    if (current && !choices.some(item => item.value === current)) this.ui.say('The saved reasoning effort is not available for this model: ' + current + '. Choose a replacement explicitly.');
+    const fallback = current ? choices.find(item => item.value === current)?.value : choices.find(item => item.value === option.defaultEffort)?.value;
+    const question = (stage ? stage + ': ' : '') + 'Choose reasoning effort for ' + model;
+    let selected: string;
+    if (this.ui.select) selected = await this.ui.select(id, question, choices, fallback, 'effort');
+    else {
+      this.ui.say(question + '\n' + choices.map((item, index) => `${index + 1}. ${item.label}`).join('\n'));
+      selected = resolveChoice(await this.ui.ask(id, 'Choose reasoning effort by number', fallback), choices, fallback, true, 'effort');
+    }
+    if (!choices.some(item => item.value === selected)) throw new Error('The selected reasoning effort is not in the displayed catalog');
+    return Assignment.parse({provider, model, effort: selected}).effort!;
   }
   async compatibility(root: string, profile: ModelProfile) {
     if (!await this.ui.confirm('model-requests', 'Allow read-only AI interviews and planning with this profile using your official CLI account?'))
@@ -110,7 +176,7 @@ export class Guided {
       if (diagnostic.isolation === false) throw new Error((diagnostic.detail || 'Provider isolation is unavailable') + '. Use config to explicitly choose another provider; no fallback was applied.');
       if (this.store.hasProbe(assignment, diagnostic)) continue;
       if (!diagnostic.version || !diagnostic.executable) throw new Error('Cannot establish official client identity');
-      if (!await this.ui.confirm('probe:' + assignment.provider + ':' + assignment.model, `Validate ${assignment.provider}/${assignment.model} with a read-only request and exact-session resume? This uses account quota.`))
+      if (!await this.ui.confirm('probe:' + assignment.provider + ':' + assignment.model + (assignment.effort ? ':' + assignment.effort : ''), `Validate ${assignment.provider}/${assignment.model} (effort: ${assignment.effort || 'CLI default'}) with a read-only request and exact-session resume? This uses account quota.`))
         throw new Error('Compatibility validation was not authorized');
       const key = 'guided-probe:' + hash({root, assignment, version: diagnostic.version, executable: diagnostic.executable}), owner = this.store.acquire(key);
       try {
@@ -220,6 +286,7 @@ export class Guided {
     const discovery = await discover(root, this.store);
     const current = existsSync(join(root, '.easy-skills/project.yaml')) ? loadProject(root) : undefined;
     const interviewKey = 'onboarding:' + hash({root, fingerprint: discovery.fingerprint, update});
+    this.showStage('DEFINE', 'current');
     const reply = await this.interview(root, interviewKey, profile.assignments.DEFINE,
       `Investigate this project progressively. Infer architecture, coding style, security boundaries, tests, deprecated patterns and relevant skills from maintained examples. Cite repository paths for inferred rules; distinguish owner decisions. Identify contradictions and ask focused questions. Do not ask about facts already visible in source. Propose the smallest meaningful required checks and setup commands supported by repository evidence; do not execute them. Preserve mandatory existing checks. No merge policy is needed for manual PR delivery. Discovery: ${JSON.stringify(discovery)}\nExisting configuration: ${JSON.stringify(current)}\nExisting knowledge: ${JSON.stringify(knowledgeSnapshot(root))}\nRequested rule update: ${JSON.stringify(update || null)}\nReturn the proposed project configuration and rules.`, ProjectReply);
     if (reply.conflicts.length) throw new Error('Resolve these project rule conflicts before approval: ' + reply.conflicts.join('; '));
@@ -290,6 +357,7 @@ export class Guided {
     await git.fetch();
     const discovery = await discover(root, this.store, source.title, project.mainBranch);
     const key = 'task-interview:' + hash({root, source, assignment: profile.assignments.DEFINE, revision: previous?.planHash, fingerprint: discovery.fingerprint});
+    this.showStage('DEFINE', 'current');
     const reply = await this.interview(previous?.worktree || root, key, profile.assignments.DEFINE,
       `Investigate the task, relevant code, tests and skills. Keep unrelated linked Issues out of scope. Derive meaningful acceptance criteria and explicit exclusions. Ask only important questions that repository evidence cannot answer. Inspect related references only when useful; do not run checks. The source checkout can differ from the target: inspect git show ${discovery.baseHead}:PATH for relevant target code without changing branches. For feedback, inspect the provided existing worktree and actual diff as well.\nTask: ${JSON.stringify(source)}\nApproved project rules: ${JSON.stringify(knowledgeSnapshot(root))}\nDiscovery: ${JSON.stringify(discovery)}\nPrevious PR: ${previous?.finalPr?.url || 'none'}`, TaskReply);
     this.ui.say('Specification:\n' + reply.specification + '\nAcceptance:\n' + reply.acceptance.map(s => '- ' + s).join('\n') + '\nOut of scope:\n' + reply.outOfScope.map(s => '- ' + s).join('\n') + '\nOpen questions: 0');
@@ -299,6 +367,7 @@ export class Guided {
       permissions: {pushBranch: true, createPullRequest: true, closeIssueOnMerge: true}, context: knowledgeSnapshot(root)};
     let featureId = previous?.plan.featureId || (source.issue ? 'issue-' + source.issue.number : this.store.operation<string>(key + ':feature-id'));
     if (!featureId) {featureId = 'task-' + randomUUID().slice(0, 8); this.store.recordOperation(key + ':feature-id', key, 'task.identified', featureId);}
+    this.showStage('PLAN', 'current');
     const plan = await generatePlan(this.store, root, {featureId,
       title: source.title, spec: reply.specification + (refinement ? '\n\nOwner clarification:\n' + redact(refinement) : '') + '\n\nAcceptance:\n' + reply.acceptance.map(s => '- ' + s).join('\n') + '\n\nOut of scope:\n' + reply.outOfScope.map(s => '- ' + s).join('\n'),
       assignments: profile.assignments, permissions: {publishIssues: false, mergeIntermediate: false}, workflow}, this.client,
@@ -315,7 +384,7 @@ export class Guided {
       (plan.workflow?.issue ? 'Keep the original Issue open until its reviewed PR is actually merged, then close it.\n' : '') +
       `Repair limit: ${plan.repairPolicy?.maxCompletedAttempts} completed corrective attempts. Final merge: manual; no merge authorized.\n` +
       `Scope: ${JSON.stringify(plan.tasks[0]?.scope || 'the displayed specification and acceptance criteria')}\n` +
-      Stage.options.map(stage => `${stage.padEnd(7)} ${plan.assignments[stage].provider}  ${plan.assignments[stage].model}`).join('\n'));
+      Stage.options.map(stage => `${stage.padEnd(7)} ${plan.assignments[stage].provider}  ${plan.assignments[stage].model}  effort: ${plan.assignments[stage].effort || 'CLI default (not pinned)'}`).join('\n'));
     if (!await this.ui.confirm('task:approve', previous ? 'Approve this revised plan and update the existing PR?' : 'Start autonomous development with exactly this plan and these permissions?', hash(plan)))
       throw new Error('Execution was not approved; no branch, Issue or PR was created. To discuss corrections, use run TASK --refine "your correction".');
     const identity = await new Git(root).identity(), engine = new Engine(this.store, {client: this.client, github: this.options.github});

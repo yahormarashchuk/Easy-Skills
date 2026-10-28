@@ -9,9 +9,12 @@ export const Identifier = z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/);
 export const Assignment = z.object({
   provider: Provider,
   model: z.string().min(1).max(150).regex(/^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/),
+  effort: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).optional(),
 }).strict().superRefine((value, ctx) => {
   if (value.provider === 'claude-code' && ['default', 'best', 'sonnet', 'opus', 'haiku', 'fable', 'opusplan'].includes(value.model))
     ctx.addIssue({code: 'custom', message: 'Use an exact Claude model ID; mutable aliases and hybrid routing are not permitted'});
+  if (value.provider === 'claude-code' && value.effort !== undefined)
+    ctx.addIssue({code: 'custom', message: 'Reasoning effort is not supported for Claude Code assignments'});
 });
 export type Assignment = z.infer<typeof Assignment>;
 export const Assignments = z.object({

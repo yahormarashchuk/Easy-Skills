@@ -68,6 +68,22 @@ test('resume of an already monitored ready feature does not leave a deferred exe
   } finally {f.store.release(key, owner); await f.dispose();}
 });
 
+test('readable status highlights the current stage and JSON status stays machine-readable', async () => {
+  const f = await fixture();
+  try {
+    f.engine.approve(f.run.id, f.run.planHash);
+    const run = async (args: string[]) => execute({command: process.execPath, args: ['--import', 'tsx', resolve('src/cli/index.ts'), '--project', f.root, ...args]},
+      {cwd: process.cwd(), env: {EASY_SKILLS_HOME: f.store.home}, timeoutMs: 20_000});
+    const readable = await run(['status']);
+    assert.equal(readable.code, 0, readable.stderr);
+    assert.match(readable.stdout, /CURRENT STAGE: BUILD/);
+    assert.match(readable.stdout, /Implement the approved changes/);
+    assert.doesNotMatch(readable.stdout, /\u001b\[/);
+    const json = await run(['status', '--json']);
+    assert.equal(json.code, 0, json.stderr); assert.equal(JSON.parse(json.stdout)[0].status, 'approved');
+  } finally {await f.dispose();}
+});
+
 for (const status of ['approved', 'running'] as const) test(`R9: CLI resume accepts ${status} without duplicating an attached executor`, async () => {
   const f = await fixture(), key = 'worker:' + f.run.id, owner = f.store.acquire(key);
   try {
