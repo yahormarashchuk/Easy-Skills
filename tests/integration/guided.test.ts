@@ -135,6 +135,32 @@ test('new profiles select current client models by number and preserve per-stage
   } finally {await f.dispose();}
 });
 
+test('invalid interactive stage provider is explained and retried without losing earlier assignments', async () => {
+  const f = await setup();
+  try {
+    const messages: string[] = [], questions: string[] = [];
+    const ui = new TerminalInteraction();
+    ui.say = text => {messages.push(text);};
+    let reviewAttempts = 0;
+    ui.ask = async (id, _question, fallback) => {
+      questions.push(id);
+      if (id === 'profile:REVIEW:provider' && reviewAttempts++ === 0) return '1';
+      return fallback || 'Profile';
+    };
+    ui.confirm = async () => true;
+    ui.select = async (_id, _question, choices) => choices[1]!.value;
+    f.client.listModels = async () => [{model: 'first-model', displayName: 'First', isDefault: true}, {model: 'second-model', displayName: 'Second', isDefault: false}];
+    const profile = await new Guided(f.store, ui, {client: f.client}).profile(f.root);
+    assert.equal(reviewAttempts, 2);
+    assert.equal(questions.filter(id => id === 'profile:BUILD:provider').length, 1);
+    assert.ok(messages.some(text => /Unknown provider/.test(text) && /Model numbers/.test(text)));
+    assert.equal(profile.assignments.BUILD.model, 'second-model');
+    assert.equal(profile.assignments.REVIEW.model, 'second-model');
+    assert.equal(profile.assignments.REVIEW.provider, 'codex');
+    ui.close();
+  } finally {await f.dispose();}
+});
+
 test('editing refreshes the catalog, requires an explicit replacement for an unavailable saved model and handles empty catalogs', async () => {
   const f = await setup();
   try {

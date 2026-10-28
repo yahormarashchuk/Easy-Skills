@@ -87,6 +87,11 @@ answers must use exact IDs from that catalog: menu numbers are deliberately reje
 in scripts because catalog ordering can change. Importing an explicit profile remains
 available for advanced operation.
 
+Provider prompts accept `codex` or `claude-code`; press Enter to keep the displayed
+provider. An invalid interactive answer is explained and the same question is asked
+again. Model numbers belong to the following model prompt. Invalid scripted provider
+answers stop with a clear error and must be corrected in the answer file.
+
 | Prompt ID | Meaning |
 | --- | --- |
 | `profile:reuse` | Reuse displayed saved assignments |

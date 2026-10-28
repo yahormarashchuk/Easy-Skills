@@ -3,7 +3,7 @@ import { existsSync, readFileSync, writeFileSync, copyFileSync, renameSync, real
 import { join, resolve, relative, isAbsolute } from 'node:path';
 import { z } from 'zod';
 import { stringify } from 'yaml';
-import { Assignments, Assignment, Plan, Project, Stage, type Run } from '../contracts.js';
+import { Assignments, Assignment, Plan, Project, Provider, Stage, type Run } from '../contracts.js';
 import { CliClient, type Client } from '../adapters/index.js';
 import { Gh, type GitHub, type Issue } from '../github/index.js';
 import { Git } from '../git/index.js';
@@ -22,6 +22,7 @@ import type { ModelOption } from '../adapters/model-catalog.js';
 export interface Interaction {
   say(text: string): void;
   ask(id: string, question: string, fallback?: string): Promise<string>;
+  askProvider?(id: string, question: string, fallback: Assignment['provider']): Promise<Assignment['provider']>;
   confirm(id: string, question: string, binding?: string): Promise<boolean>;
   select?(id: string, question: string, choices: Choice[], fallback?: string): Promise<string>;
 }
@@ -77,21 +78,21 @@ export class Guided {
             return profile;
           }
         }
-        const provider = await this.ui.ask('profile:provider', 'Default provider (codex or claude-code)', profile?.assignments.BUILD.provider || 'codex');
+        const provider = await this.chooseProvider('profile:provider', 'Default provider (codex or claude-code)', profile?.assignments.BUILD.provider || 'codex');
         const model = await this.chooseModel(root, provider, 'profile:model', catalogs, profile?.assignments.BUILD.model);
         const assignment = Assignment.parse({provider, model});
         profile = {name: selected, assignments: Assignments.parse(Object.fromEntries(Stage.options.map(stage => [stage, assignment])))};
       } else {
         this.ui.say('A profile is a name for your saved stage settings. Press Enter to use Balanced, or choose any name you like.');
         const name = await this.ui.ask('profile:name', 'Name for your model profile', 'Balanced');
-        const provider = await this.ui.ask('profile:provider', 'Provider (codex or claude-code)', 'codex');
+        const provider = await this.chooseProvider('profile:provider', 'Provider (codex or claude-code)', 'codex');
         const model = await this.chooseModel(root, provider, 'profile:model', catalogs);
         const assignment = Assignment.parse({provider, model});
         profile = {name, assignments: Assignments.parse(Object.fromEntries(Stage.options.map(stage => [stage, assignment])))};
       }
       if (await this.ui.confirm('profile:customize', 'Choose a different assignment for individual stages?')) {
         for (const stage of Stage.options) {
-          const provider = await this.ui.ask('profile:' + stage + ':provider', stage + ' provider', profile.assignments[stage].provider);
+          const provider = await this.chooseProvider('profile:' + stage + ':provider', stage + ' provider', profile.assignments[stage].provider);
           const model = await this.chooseModel(root, provider, 'profile:' + stage + ':model', catalogs, profile.assignments[stage].model, stage);
           profile.assignments[stage] = Assignment.parse({provider, model});
         }
@@ -105,6 +106,12 @@ export class Guided {
   }
   private showProfile(profile: ModelProfile) {
     this.ui.say('AI profile: ' + profile.name + '\n' + Stage.options.map(stage => `${stage.padEnd(7)} ${profile.assignments[stage].provider}  ${profile.assignments[stage].model}`).join('\n'));
+  }
+  private async chooseProvider(id: string, question: string, fallback: Assignment['provider']): Promise<Assignment['provider']> {
+    const value = this.ui.askProvider ? await this.ui.askProvider(id, question, fallback) : await this.ui.ask(id, question, fallback);
+    const result = Provider.safeParse(value);
+    if (!result.success) throw new Error(`Invalid provider for ${id}. Enter codex or claude-code.`);
+    return result.data;
   }
   private async chooseModel(root: string, inputProvider: string, id: string, catalogs: Map<Assignment['provider'], ModelOption[]>, current?: string, stage?: Stage) {
     const provider = Assignment.parse({provider: inputProvider, model: 'catalog-only'}).provider;

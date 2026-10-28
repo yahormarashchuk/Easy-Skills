@@ -5,6 +5,7 @@ import { z } from 'zod';
 import type { Interaction } from '../runner/guided.js';
 import { redact } from '../util.js';
 import { resolveChoice, type Choice } from './choices.js';
+import { Provider } from '../contracts.js';
 
 const Script = z.record(z.string(), z.union([z.string(), z.boolean()]));
 /** Missing scripted consent is always an error, never an implicit yes. */
@@ -27,6 +28,17 @@ export class TerminalInteraction implements Interaction {
     if (typeof answer !== 'string') throw new Error('Expected text for ' + id);
     if (!answer && !fallback) throw new Error('A value is required for ' + id);
     return answer || fallback!;
+  }
+  async askProvider(id: string, question: string, fallback: Provider): Promise<Provider> {
+    const scripted = !!this.answers || !!this.options.nonInteractive;
+    while (true) {
+      const answer = await this.ask(id, question, fallback);
+      const provider = Provider.safeParse(answer);
+      if (provider.success) return provider.data;
+      const message = 'Unknown provider. Enter codex or claude-code, or press Enter to keep the displayed provider. Model numbers are chosen at the next prompt.';
+      if (scripted) throw new Error(`Invalid provider for ${id}. Enter codex or claude-code.`);
+      this.say(message);
+    }
   }
   async select(id: string, question: string, choices: Choice[], fallback?: string) {
     if (!choices.length) throw new Error('No models are available to select');

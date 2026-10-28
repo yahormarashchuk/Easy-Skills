@@ -31,3 +31,16 @@ test('scripted model selection requires exact listed IDs and never silently adop
     rmSync(root, {recursive: true, force: true});
   }
 });
+
+test('invalid scripted provider fails clearly without retrying or substituting a provider', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'easy provider choice ')), file = join(root, 'answers.json');
+  try {
+    writeFileSync(file, JSON.stringify({'profile:REVIEW:provider': '1'}));
+    const ui = new TerminalInteraction({answers: file, nonInteractive: true});
+    await assert.rejects(ui.askProvider('profile:REVIEW:provider', 'REVIEW provider', 'codex'), /Invalid provider.*codex or claude-code/);
+    ui.close();
+  } finally {
+    if (!root.startsWith(join(tmpdir(), 'easy provider choice '))) throw new Error('Invalid provider fixture path');
+    rmSync(root, {recursive: true, force: true});
+  }
+});
