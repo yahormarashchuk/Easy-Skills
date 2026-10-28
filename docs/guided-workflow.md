@@ -92,6 +92,11 @@ provider. An invalid interactive answer is explained and the same question is as
 again. Model numbers belong to the following model prompt. Invalid scripted provider
 answers stop with a clear error and must be corrected in the answer file.
 
+Stage banners show each model-setup position and explain its responsibility. DEFINE
+and PLAN are marked during the guided conversation; `easy-skills status` highlights
+the current execution stage. Color is used only in a supported interactive terminal
+and can be disabled with `NO_COLOR`; redirected output remains readable without it.
+
 | Prompt ID | Meaning |
 | --- | --- |
 | `profile:reuse` | Reuse displayed saved assignments |

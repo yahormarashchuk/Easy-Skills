@@ -18,11 +18,13 @@ import { generatePlan } from './planning.js';
 import { Engine } from './engine.js';
 import { resolveChoice, type Choice } from '../cli/choices.js';
 import type { ModelOption } from '../adapters/model-catalog.js';
+import { stageBanner } from '../cli/presentation.js';
 
 export interface Interaction {
   say(text: string): void;
   ask(id: string, question: string, fallback?: string): Promise<string>;
   askProvider?(id: string, question: string, fallback: Assignment['provider']): Promise<Assignment['provider']>;
+  stage?(stage: Stage, context: 'model' | 'current'): void;
   confirm(id: string, question: string, binding?: string): Promise<boolean>;
   select?(id: string, question: string, choices: Choice[], fallback?: string): Promise<string>;
 }
@@ -92,6 +94,7 @@ export class Guided {
       }
       if (await this.ui.confirm('profile:customize', 'Choose a different assignment for individual stages?')) {
         for (const stage of Stage.options) {
+          this.showStage(stage, 'model');
           const provider = await this.chooseProvider('profile:' + stage + ':provider', stage + ' provider', profile.assignments[stage].provider);
           const model = await this.chooseModel(root, provider, 'profile:' + stage + ':model', catalogs, profile.assignments[stage].model, stage);
           profile.assignments[stage] = Assignment.parse({provider, model});
@@ -106,6 +109,9 @@ export class Guided {
   }
   private showProfile(profile: ModelProfile) {
     this.ui.say('AI profile: ' + profile.name + '\n' + Stage.options.map(stage => `${stage.padEnd(7)} ${profile.assignments[stage].provider}  ${profile.assignments[stage].model}`).join('\n'));
+  }
+  private showStage(stage: Stage, context: 'model' | 'current') {
+    if (this.ui.stage) this.ui.stage(stage, context); else this.ui.say(stageBanner(stage, context));
   }
   private async chooseProvider(id: string, question: string, fallback: Assignment['provider']): Promise<Assignment['provider']> {
     const value = this.ui.askProvider ? await this.ui.askProvider(id, question, fallback) : await this.ui.ask(id, question, fallback);
@@ -258,6 +264,7 @@ export class Guided {
     const discovery = await discover(root, this.store);
     const current = existsSync(join(root, '.easy-skills/project.yaml')) ? loadProject(root) : undefined;
     const interviewKey = 'onboarding:' + hash({root, fingerprint: discovery.fingerprint, update});
+    this.showStage('DEFINE', 'current');
     const reply = await this.interview(root, interviewKey, profile.assignments.DEFINE,
       `Investigate this project progressively. Infer architecture, coding style, security boundaries, tests, deprecated patterns and relevant skills from maintained examples. Cite repository paths for inferred rules; distinguish owner decisions. Identify contradictions and ask focused questions. Do not ask about facts already visible in source. Propose the smallest meaningful required checks and setup commands supported by repository evidence; do not execute them. Preserve mandatory existing checks. No merge policy is needed for manual PR delivery. Discovery: ${JSON.stringify(discovery)}\nExisting configuration: ${JSON.stringify(current)}\nExisting knowledge: ${JSON.stringify(knowledgeSnapshot(root))}\nRequested rule update: ${JSON.stringify(update || null)}\nReturn the proposed project configuration and rules.`, ProjectReply);
     if (reply.conflicts.length) throw new Error('Resolve these project rule conflicts before approval: ' + reply.conflicts.join('; '));
@@ -328,6 +335,7 @@ export class Guided {
     await git.fetch();
     const discovery = await discover(root, this.store, source.title, project.mainBranch);
     const key = 'task-interview:' + hash({root, source, assignment: profile.assignments.DEFINE, revision: previous?.planHash, fingerprint: discovery.fingerprint});
+    this.showStage('DEFINE', 'current');
     const reply = await this.interview(previous?.worktree || root, key, profile.assignments.DEFINE,
       `Investigate the task, relevant code, tests and skills. Keep unrelated linked Issues out of scope. Derive meaningful acceptance criteria and explicit exclusions. Ask only important questions that repository evidence cannot answer. Inspect related references only when useful; do not run checks. The source checkout can differ from the target: inspect git show ${discovery.baseHead}:PATH for relevant target code without changing branches. For feedback, inspect the provided existing worktree and actual diff as well.\nTask: ${JSON.stringify(source)}\nApproved project rules: ${JSON.stringify(knowledgeSnapshot(root))}\nDiscovery: ${JSON.stringify(discovery)}\nPrevious PR: ${previous?.finalPr?.url || 'none'}`, TaskReply);
     this.ui.say('Specification:\n' + reply.specification + '\nAcceptance:\n' + reply.acceptance.map(s => '- ' + s).join('\n') + '\nOut of scope:\n' + reply.outOfScope.map(s => '- ' + s).join('\n') + '\nOpen questions: 0');
@@ -337,6 +345,7 @@ export class Guided {
       permissions: {pushBranch: true, createPullRequest: true, closeIssueOnMerge: true}, context: knowledgeSnapshot(root)};
     let featureId = previous?.plan.featureId || (source.issue ? 'issue-' + source.issue.number : this.store.operation<string>(key + ':feature-id'));
     if (!featureId) {featureId = 'task-' + randomUUID().slice(0, 8); this.store.recordOperation(key + ':feature-id', key, 'task.identified', featureId);}
+    this.showStage('PLAN', 'current');
     const plan = await generatePlan(this.store, root, {featureId,
       title: source.title, spec: reply.specification + (refinement ? '\n\nOwner clarification:\n' + redact(refinement) : '') + '\n\nAcceptance:\n' + reply.acceptance.map(s => '- ' + s).join('\n') + '\n\nOut of scope:\n' + reply.outOfScope.map(s => '- ' + s).join('\n'),
       assignments: profile.assignments, permissions: {publishIssues: false, mergeIntermediate: false}, workflow}, this.client,

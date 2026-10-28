@@ -6,6 +6,8 @@ import type { Interaction } from '../runner/guided.js';
 import { redact } from '../util.js';
 import { resolveChoice, type Choice } from './choices.js';
 import { Provider } from '../contracts.js';
+import { stageBanner, useColor } from './presentation.js';
+import type { Stage } from '../contracts.js';
 
 const Script = z.record(z.string(), z.union([z.string(), z.boolean()]));
 /** Missing scripted consent is always an error, never an implicit yes. */
@@ -16,6 +18,7 @@ export class TerminalInteraction implements Interaction {
     if (options.answers) this.answers = Script.parse(JSON.parse(readFileSync(options.answers, 'utf8')));
   }
   say(text: string) {stdout.write(redact(text) + '\n\n');}
+  stage(stage: Stage, context: 'model' | 'current') {this.say(stageBanner(stage, context, !this.answers && !this.options.nonInteractive && useColor(stdout.isTTY)));}
   private async input(id: string, question: string, fallback?: string) {
     if (this.answers && id in this.answers) return this.answers[id]!;
     if (this.options.nonInteractive || this.answers || !stdin.isTTY || !stdout.isTTY)

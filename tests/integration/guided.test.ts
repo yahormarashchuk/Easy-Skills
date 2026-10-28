@@ -131,6 +131,9 @@ test('new profiles select current client models by number and preserve per-stage
     const profile = await f.wizard.profile(f.root);
     assert.equal(calls, 1); assert.equal(profile.assignments.BUILD.model, 'catalog-model-a'); assert.equal(profile.assignments.REVIEW.model, 'catalog-model-b');
     assert.ok(f.ui.messages.some(text => text.includes('1. Model B') && text.includes('2. Model A')));
+    assert.ok(f.ui.messages.some(text => text.includes('[3/6] MODEL SETUP: BUILD') && text.includes('Implement the approved changes')));
+    assert.ok(f.ui.messages.some(text => text.includes('[4/6] MODEL SETUP: VERIFY') && text.includes('Run checks')));
+    assert.ok(f.ui.messages.some(text => text.includes('[5/6] MODEL SETUP: REVIEW')));
     const saved = await f.wizard.profile(f.root); assert.deepEqual(saved, profile); assert.equal(calls, 1);
   } finally {await f.dispose();}
 });
