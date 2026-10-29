@@ -200,9 +200,16 @@ export class Engine {
   }
   private async prepare(run: Run, git: Git, github: GitHub) {
     await git.fetch();
+    if (!git.author && !await git.hasAuthor()) {
+      if (!github.author) throw new Blocked('Git has no author identity (user.name and user.email) for task commits');
+      git.author = await github.author();
+    }
     if (!run.worktree) {
       run.worktree = await this.ownedWorktree(run, git, run.branch, run.plan.workflow?.baseHead || `origin/${run.plan.project.mainBranch}`, 'integration');
-      this.store.save(run, 'integration.created');
+      // Approved scope may name inputs that exist only as uncommitted files in the source checkout.
+      const carried = await git.carryUncommitted(run.root, run.worktree, [...new Set(run.plan.tasks.flatMap(task => task.scope?.paths || []))]);
+      if (carried.length) await git.commit(run.worktree, 'Add uncommitted task inputs from the source checkout');
+      this.store.save(run, 'integration.created', carried.length ? {carried} : {});
     }
     await this.guard(run, run.worktree);
     await this.setup(run, git, run.worktree);

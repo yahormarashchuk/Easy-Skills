@@ -54,6 +54,15 @@ advanced feature behavior and serialized identity. Direct branches use `codex/`.
 The historical internal worktree resource name remains `integration`; only one task
 branch and worktree exist.
 
+When the task worktree is created, files inside the approved scope paths that are
+modified, staged, deleted or untracked (not ignored) in the source checkout are copied
+into it and committed as `Add uncommitted task inputs from the source checkout`, so
+BUILD sees inputs that were never committed. The source checkout is not changed, and
+files outside the scope and `.easy-skills/` are never copied. On Windows the
+repository's `core.longpaths` is set to `true` first, because task worktrees live
+under the state directory. If Git has no `user.name`/`user.email`, task commits use the
+signed-in GitHub account's name and no-reply address.
+
 Direct BUILD enters the existing final SYNC, VERIFY, REVIEW and SHIP machine. Baseline
 evidence, setup/resource locks, protected controls, complete file review coverage,
 bounded repairs, commit intents, worker locks and network reconciliation still apply.

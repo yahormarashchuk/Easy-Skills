@@ -24,6 +24,8 @@ export interface GitHub {
   commentOnce(number: number, key: string, body: string): Promise<void>;
   queueEntry?(number: number): Promise<boolean>;
   observeMerge?(number: number, head: string, operationId: string): Promise<MergeResult>;
+  /** The signed-in account as a commit identity, using its GitHub no-reply address. */
+  author?(): Promise<{name: string; email: string}>;
 }
 export class Gh implements GitHub {
   constructor(readonly repository: string, readonly cwd: string, readonly runner = execute) {}
@@ -31,6 +33,10 @@ export class Gh implements GitHub {
     const args = ['api', '--hostname', 'github.com', `repos/${this.repository}/${path}`, '--method', method, '-H', 'X-GitHub-Api-Version: 2026-03-10'];
     if (body !== undefined) args.push('--input', '-');
     return this.request<T>(args, body);
+  }
+  async author() {
+    const user = await this.request<{login: string; id: number; name?: string | null}>(['api', '--hostname', 'github.com', 'user', '-H', 'X-GitHub-Api-Version: 2026-03-10']);
+    return {name: user.name || user.login, email: `${user.id}+${user.login}@users.noreply.github.com`};
   }
   private async request<T>(args: string[], body?: unknown): Promise<T> {
     const result = await this.runner({command: 'gh', args}, {cwd: this.cwd, role: 'github', input: body === undefined ? undefined : JSON.stringify(body), timeoutMs: 120_000});
