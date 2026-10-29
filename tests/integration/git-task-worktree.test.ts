@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { checked, execute } from '../../src/process.js';
 import { Git } from '../../src/git/index.js';
+import { rulesHash } from '../../src/util.js';
 
 const longPaths = async (root: string) => (await execute({command: 'git', args: ['config', '--local', '--get', 'core.longpaths']}, {cwd: root})).stdout.trim();
 
@@ -75,4 +76,27 @@ test('without a configured Git identity, task commits use the supplied author', 
     for (const [name, value] of Object.entries(saved)) if (value === undefined) delete process.env[name]; else process.env[name] = value;
     rmSync(root, {recursive: true, force: true});
   }
+});
+
+test('ignored instruction files from the source checkout are copied so the task worktree matches the approved rules hash', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'easy controls ')), source = join(root, 'source'), target = join(root, 'task');
+  try {
+    mkdirSync(join(source, '.claude/skills/review'), {recursive: true});
+    await checked('git', ['init', '--initial-branch=trunk'], source);
+    await checked('git', ['config', 'user.name', 'Easy Skills Test'], source);
+    await checked('git', ['config', 'user.email', 'test@example.invalid'], source);
+    writeFileSync(join(source, '.gitignore'), '.claude/skills/\n');
+    writeFileSync(join(source, '.claude/settings.json'), '{}');
+    writeFileSync(join(source, 'AGENTS.md'), 'tracked rules');
+    await checked('git', ['add', '--all'], source);
+    await checked('git', ['commit', '-m', 'base'], source);
+    writeFileSync(join(source, '.claude/skills/review/SKILL.md'), 'generated skill');
+    await checked('git', ['worktree', 'add', '-b', 'task', target, 'HEAD'], source);
+    const git = new Git(source);
+    assert.notEqual(rulesHash(target), rulesHash(source));
+    assert.deepEqual(await git.carryIgnoredControls(source, target), ['.claude/skills/review/SKILL.md']);
+    assert.equal(rulesHash(target), rulesHash(source));
+    assert.equal(await git.run(['status', '--porcelain'], target), '');
+    assert.deepEqual(await git.carryIgnoredControls(source, target), []);
+  } finally {rmSync(root, {recursive: true, force: true});}
 });
