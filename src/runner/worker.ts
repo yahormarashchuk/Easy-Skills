@@ -6,8 +6,10 @@ import { flushNotifications } from '../notifications/index.js';
 import { message, redact } from '../util.js';
 import type { GitHub } from '../github/index.js';
 
-export async function worker(store: Store, id: string, options: {engine?: Engine; github?: GitHub; signal?: AbortSignal; notify?: () => Promise<unknown>; now?: () => number; pollMs?: number} = {}) {
+export async function worker(store: Store, id: string, options: {engine?: Engine; github?: GitHub; signal?: AbortSignal; notify?: () => Promise<unknown>; now?: () => number; pollMs?: number; build?: () => string} = {}) {
   const key = 'worker:' + id, owner = store.acquire(key);
+  const build = options.build?.();
+  if (build !== undefined) store.recordOperation(`${id}:worker-build`, id, 'worker.build', {build});
   const abort = new AbortController();
   const stop = () => abort.abort();
   options.signal?.addEventListener('abort', stop, {once: true});
@@ -37,6 +39,8 @@ export async function worker(store: Store, id: string, options: {engine?: Engine
     while (!abort.signal.aborted) {
       const run = store.get(id);
       if (['merged', 'stopped', 'draft', 'abandoned'].includes(run.status)) break;
+      // A newly installed build replaces this worker between executions, so a resume never runs outdated code.
+      if (build !== undefined && options.build!() !== build) {report('worker.replaced', new Error('A different Easy Skills build is installed; this worker exits so resume starts the new one')); break;}
       const resume = store.operation<{resume: boolean}>(`${id}:resume-request`);
       const control = store.operation<{action: 'pause' | 'stop'}>(`${id}:control`);
       if (control?.action && run.status !== 'running' && !store.locked('run:' + id)) {
