@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { Assignments, Identifier, Plan, VERSION, DirectWorkflow, type Run } from '../contracts.js';
-import { CliClient, type Client } from '../adapters/index.js';
+import { CliClient, InvalidResult, type Client } from '../adapters/index.js';
 import { Store } from '../persistence/store.js';
 import { loadProject } from '../cli/project.js';
 import { Git } from '../git/index.js';
@@ -38,12 +38,19 @@ ${previous ? `You are in the existing task worktree at reviewed revision ${previ
 Build a complete Plan JSON object from this seed, replacing its placeholder tasks with small sequentially executable slices:
 ${JSON.stringify(seed)}
 ${seed.workflow ? 'Direct mode: return exactly ONE independent task, with explicit repository-relative scope.paths covering implementation and regression tests. Inspect the bound workflow.baseHead with read-only git show if the source checkout differs. Do not switch branches or decompose into intermediate Issues or PRs.' : 'Advanced feature mode: decompose only when meaningful dependencies require it.'}
-Preserve specification, project, exact assignments, permissions, rules hash and package versions. Return the complete plan serialized as a JSON string in planJson of the structured result. No approval is implied.`);
+Every task needs scope with both areas (an array of identifiers, [] when none apply) and paths. Preserve specification, project, exact assignments, permissions, rules hash and package versions. Return the complete plan serialized as a JSON string in planJson of the structured result. No approval is implied.`);
     const cached = cacheDraft ? store.operation<Plan>(key + ':draft') : undefined;
-    const result = cached ? {outcome: 'passed', plan: cached, summary: 'Saved unapproved technical plan'} : await client.run(request.assignments.PLAN, prompt, {cwd: previous?.worktree || identity.root, projectRoot: identity.root, mode: 'read', stage: 'PLAN', session: saved?.session, onLine,
+    const ask = (text: string, session?: string) => client.run(request.assignments.PLAN, text, {cwd: previous?.worktree || identity.root, projectRoot: identity.root, mode: 'read', stage: 'PLAN', session, onLine,
       onSpawn: pid => store.recordOperation(key, run.id, 'planning.session', {...store.operation<object>(key), pid, identity: processIdentity(pid)}),
       onSession: session => store.recordOperation(key, run.id, 'planning.session', {...store.operation<object>(key), session}),
     });
+    /** A long plan can miss one required field; the same session is asked once to correct it instead of discarding the work. */
+    const corrected = (error: unknown) => {
+      const session = store.operation<{session?: string}>(key)?.session;
+      if (!(error instanceof InvalidResult) || !session) throw error;
+      return ask(`Your structured result failed validation: ${error.reason}. Return the complete corrected result in the same structured format, with the complete plan in planJson. Change only what is needed to pass validation.`, session);
+    };
+    const result = cached ? {outcome: 'passed', plan: cached, summary: 'Saved unapproved technical plan'} : await ask(prompt, saved?.session).catch(corrected);
     if (result.outcome !== 'passed' || !result.plan) throw new Error('PLAN did not return a complete validated plan: ' + result.summary);
     const plan = Plan.parse(result.plan);
     for (const field of ['schemaVersion', 'featureId', 'title', 'spec', 'project', 'assignments', 'permissions', 'verification', 'workflow', 'repairPolicy', 'protectedInputs', 'rulesHash', 'rulesAgreement', 'runnerVersion', 'skillsVersion'] as const)
