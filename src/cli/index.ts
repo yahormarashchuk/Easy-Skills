@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
-import { readFileSync, writeFileSync, openSync, closeSync, realpathSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, openSync, closeSync, realpathSync, existsSync, statSync } from 'node:fs';
+import { setTimeout as delay } from 'node:timers/promises';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -50,9 +51,17 @@ function summary(run: import('../contracts.js').Run) {
     (run.status === 'ready' ? `Ready for review: ${run.finalPr?.url}\nChecks: passed at ${run.finalReviewHead}\nReview: passed. Final merge: manual.` : stageBanner(stage, 'current', useColor(process.stdout.isTTY), !!process.stdout.isTTY && useUnicode())) +
     (run.reason ? '\n' + run.reason : '') + (run.pendingDecision ? '\nDecision: ' + run.pendingDecision.question : '');
 }
-function start(store: Store, id: string) {
+/** Identifies the installed CLI build, so a worker started by an older build is replaced rather than reused. */
+function buildStamp() {const file = statSync(fileURLToPath(import.meta.url)); return `${file.size}:${file.mtimeMs}`;}
+async function start(store: Store, id: string) {
+  if (store.locked('worker:' + id)) {
+    const recorded = store.operation<{build?: string}>(`${id}:worker-build`)?.build;
+    if (!recorded || recorded === buildStamp()) return {runId: id, attached: true, status: store.get(id).status};
+    // An idle worker of another build exits by itself at its next checkpoint; wait for it instead of attaching.
+    for (const until = Date.now() + 15_000; store.locked('worker:' + id) && Date.now() < until;) await delay(250);
+    if (store.locked('worker:' + id)) return {runId: id, attached: true, status: store.get(id).status, note: 'A worker of another Easy Skills build is still busy; resume again once it reaches a safe checkpoint.'};
+  }
   const run = store.get(id);
-  if (store.locked('worker:' + id)) return {runId: id, attached: true, status: run.status};
   if (!['approved', 'running', 'paused', 'needs_decision', 'waiting_quota', 'waiting_external', 'waiting_resource', 'ready'].includes(run.status)) throw new Error('Run is not startable');
   const log = join(ensureDir(join(store.home, 'logs', id)), 'worker.log');
   const fd = openSync(log, 'a', 0o600);
@@ -111,7 +120,7 @@ program.command('run <task>').description('Discuss an Issue, local specification
     await wizard.onboard(cwd(), profile);
     const plan = await wizard.proposal(cwd(), task, profile, undefined, opts.refine), run = await wizard.approve(cwd(), plan);
     if (opts.foreground) ui.say(summary(await new Engine(store).run(run.id)));
-    else {start(store, run.id); ui.say('Autonomous development started. Use easy-skills status to follow progress and easy-skills resume after an interruption.');}
+    else {await start(store, run.id); ui.say('Autonomous development started. Use easy-skills status to follow progress and easy-skills resume after an interruption.');}
   }));
 program.command('revise <task> <feedback>').description('Review a revised plan and update the same task branch and PR')
   .option('--answers <json>').option('--non-interactive').option('--foreground')
@@ -121,7 +130,7 @@ program.command('revise <task> <feedback>').description('Review a revised plan a
     const profile = await wizard.profile(cwd()); await wizard.compatibility(cwd(), profile);
     const plan = await wizard.proposal(cwd(), feedback, profile, previous), run = await wizard.approve(cwd(), plan, previous);
     if (opts.foreground) ui.say(summary(await new Engine(store).run(run.id)));
-    else {start(store, run.id); ui.say('Applying approved feedback on the existing branch and PR. Use easy-skills status for progress.');}
+    else {await start(store, run.id); ui.say('Applying approved feedback on the existing branch and PR. Use easy-skills status for progress.');}
   }));
 program.command('project-config').requiredOption('--file <yaml>', 'Reviewed replacement project v2 configuration').option('--apply-hash <hash>', 'Apply the reviewed configuration with a backup')
   .action(async opts => output(await updateProject(cwd(), read(opts.file), opts.applyHash)));
@@ -184,13 +193,13 @@ feature.command('draft').requiredOption('--file <yaml>', 'Complete plan YAML').a
 feature.command('approve <id>').requiredOption('--hash <sha256>', 'Exact reviewed plan hash')
   .action(async (id, opts) => withStore(store => output(new Engine(store).approve(id, opts.hash))));
 program.command('start <id>').option('--foreground', 'Run one execution pass attached to this terminal')
-  .action(async (id, opts) => withStore(async store => output(opts.foreground ? await new Engine(store).run(id) : start(store, id))));
+  .action(async (id, opts) => withStore(async store => output(opts.foreground ? await new Engine(store).run(id) : await start(store, id))));
 program.command('resume [id]').description('Resume the latest task, Issue number, or run ID with exact recorded sessions')
   .action(async reference => withStore(async store => {
     const run = reference && /^[a-f0-9-]{36}$/.test(reference) ? store.get(reference) : resolveRun(store, (await new Git(cwd()).identity()).root, reference), id = run.id;
     if (!['approved', 'running', 'paused', 'needs_decision', 'waiting_quota', 'waiting_external', 'waiting_resource', 'ready'].includes(run.status)) throw new Error('Run is not resumable');
     if (run.status !== 'ready') store.recordOperation(`${id}:resume-request`, id, 'local.resume', {resume: true});
-    output(start(store, id));
+    output(await start(store, id));
   }));
 program.command('pause <id>').action(async id => withStore(store => {new Engine(store).requestControl(id, 'pause'); output({runId: id, requested: 'pause', at: 'next safe checkpoint'});}));
 program.command('stop <id>').action(async id => withStore(store => {new Engine(store).requestControl(id, 'stop'); output({runId: id, requested: 'stop', at: 'next safe checkpoint'});}));
@@ -215,7 +224,7 @@ program.command('retry-merge <id>').requiredOption('--pr <number>', 'Previously 
 program.command('request-merge <id>').description('Send a one-time remote confirmation code by configured email')
   .action(async id => withStore(async store => output({request: await requestMergeDecision(store, store.get(id)), delivery: 'SMTP accepted'})));
 program.command('answer <id>').requiredOption('--request <uuid>', 'Current decision request ID').requiredOption('--value <text>', 'Clarification within approved scope')
-  .action(async (id, opts) => withStore(store => {answerDecision(store, id, opts.request, opts.value); output(start(store, id));}));
+  .action(async (id, opts) => withStore(async store => {answerDecision(store, id, opts.request, opts.value); output(await start(store, id));}));
 program.command('cleanup <id>').option('--apply-hash <hash>', 'Remove only resources in the reviewed cleanup plan')
   .option('--setup-outputs', 'Include unchanged ignored files created by approved setup in the preview')
   .action(async (id, opts) => withStore(async store => output(opts.applyHash ? await cleanup(store, id, opts.applyHash, undefined, !!opts.setupOutputs) : await cleanupPlan(store, id, undefined, !!opts.setupOutputs))));
@@ -265,7 +274,7 @@ program.command('mcp-config').requiredOption('--path <file>', 'Native Codex TOML
   });
 program.command('inspect-compose').requiredOption('--file <yaml>').requiredOption('--feature <id>')
   .action(async opts => output(await inspectCompose(resolve(opts.file), opts.feature, cwd())));
-program.command('_worker <id>', {hidden: true}).action(async id => withStore(store => worker(store, id)));
+program.command('_worker <id>', {hidden: true}).action(async id => withStore(store => worker(store, id, {build: buildStamp})));
 
 program.parseAsync().catch(error => {
   const detail = message(error);
