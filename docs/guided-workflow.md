@@ -17,7 +17,12 @@ Approved rules live in `.easy-skills/rules/approved-rules.md`; other existing ru
 remain in force. Configuration is `.easy-skills/project.yaml`. Source paths, owner
 answers and skill references are saved in `.easy-skills/context/knowledge.json`.
 The existing versioned onboarding agreement binds configuration and the complete
-rules hash. Inferred rules must cite existing Git-tracked files; untracked and ignored
+rules hash. That hash covers `.easy-skills/rules/`, every `AGENTS.md`, `CLAUDE.md` and
+`.mcp.json`, all of `.codex/`, and the `.claude/` files Claude Code loads (`CLAUDE.md`,
+`settings.json`, `settings.local.json`, `commands/`, `agents/`, `skills/`, `hooks/`,
+`output-styles/`, `rules/`). It skips nested worktrees and repositories, including
+`.claude/worktrees/`. A covered file over 256,000 bytes stops onboarding with its path;
+binary files are bound by digest. Inferred rules must cite existing Git-tracked files; untracked and ignored
 files are not evidence. A reply with invalid evidence is discarded and the model is
 asked again with the rejected paths, so a rerun never replays it. Relevance and content
 quality still depend on the selected model and owner review.
