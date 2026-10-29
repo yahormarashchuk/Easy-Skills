@@ -62,3 +62,18 @@ test('Codex accepts a completed retried turn while terminal/protocol failures re
     {capabilities: {diagnostics: ['"C:/Program Files (x86)/node.exe" "check \u2603.mjs"'], browserTools: []}}).args;
   assert.ok(args.includes('Bash("C:/Program Files (x86)/node.exe" "check \u2603.mjs")'));
 });
+
+test('a structured result that fails validation names the failing field instead of a generic protocol error', async () => {
+  const plan = {featureId: 'f', tasks: [{id: 't', scope: {paths: ['docs/a.md']}}]};
+  const structured = {outcome: 'passed', summary: 'plan', findings: [], question: null, planJson: JSON.stringify(plan)};
+  const event = decode('claude-code', JSON.stringify({type: 'result', subtype: 'success', session_id: 's', structured_output: structured}));
+  assert.equal(event.result, undefined);
+  assert.equal(event.complete, true);
+  assert.match(event.invalid!, /\S/);
+  const client = new CliClient(async (_command, options) => {
+    options.onLine?.(JSON.stringify({type: 'result', subtype: 'success', session_id: 's', structured_output: structured}));
+    return {code: 0, stdout: '', stderr: '', timedOut: false} as never;
+  });
+  await assert.rejects(client.run({provider: 'claude-code', model: 'm', effort: 'high'} as never, 'prompt', {cwd: process.cwd(), stage: 'PLAN', mode: 'read'}),
+    /failed validation \(.+\)\. Run the command again/);
+});

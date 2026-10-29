@@ -13,6 +13,10 @@ export type ErrorKind = 'quota' | 'auth' | 'network' | 'model' | 'failure' | 'pr
 export class ClientError extends Error {
   constructor(public kind: ErrorKind, message: string, public retryAt?: string) {super(message);}
 }
+/** The client finished, but its structured result failed validation; the same session can be asked to correct it. */
+export class InvalidResult extends ClientError {
+  constructor(readonly reason: string) {super('protocol', `Client returned a structured result that failed validation (${reason}). Run the command again to have it corrected.`);}
+}
 export function classify(text: string): ErrorKind {
   if (/model[_ ]not[_ ]found|invalid model|unsupported model|model.+not (?:available|exist|supported)|unknown model/i.test(text)) return 'model';
   if (/^(?:429 rate_limit\b|rate_limit_exceeded|insufficient_quota|quota_exceeded|usage_limit_reached|rate limit exceeded|usage limit reached)(?:\b|:)/i.test(text.trim())) return 'quota';
@@ -48,7 +52,7 @@ export function invocation(assignment: Assignment, session?: string, mode: 'read
   if (mode === 'read') args.push('--tools', ['Read', 'Glob', 'Grep', ...(diagnostics.length ? ['Bash'] : []), ...browser].join(','));
   return {command: 'claude', args};
 }
-export interface ClientEvent {session?: string; result?: StageResult; complete?: boolean; error?: string; kind?: ErrorKind; fatal?: boolean; models?: string[]; retryAt?: string}
+export interface ClientEvent {session?: string; result?: StageResult; invalid?: string; complete?: boolean; error?: string; kind?: ErrorKind; fatal?: boolean; models?: string[]; retryAt?: string}
 function structuredError(event: Record<string, any>): Pick<ClientEvent, 'error' | 'kind' | 'retryAt'> {
   const detail = event.error || event;
   const code = detail.code || detail.type || event.error_code;
@@ -78,7 +82,8 @@ export function decode(provider: Assignment['provider'], line: string): ClientEv
     if (event.type === 'assistant' && event.message?.model) return {models: [event.message.model]};
     if (event.type === 'result') {
       if (event.is_error || event.subtype !== 'success') return {...structuredError(event), error: typeof event.result === 'string' ? event.result : JSON.stringify(event.errors || event.subtype), fatal: true};
-      return {session: event.session_id, result: parseResult(event.structured_output), complete: true,
+      const result = parseResult(event.structured_output);
+      return {session: event.session_id, result, invalid: result ? undefined : invalidReason(event.structured_output), complete: true,
         models: event.modelUsage ? Object.keys(event.modelUsage) : undefined};
     }
     if (event.error) return typeof event.error === 'string' ? {error: event.error} : structuredError(event);
@@ -89,6 +94,15 @@ function parseResult(text: unknown): StageResult | undefined {
   try {
     return parseOutput(text);
   } catch {return undefined;}
+}
+/** Names the first fields that failed validation, so the owner is not left with a generic protocol error. */
+function invalidReason(text: unknown): string {
+  try {parseOutput(text); return 'the result was empty';}
+  catch (error) {
+    const issues = (error as {issues?: {path: PropertyKey[]; message: string}[]}).issues;
+    if (issues?.length) return issues.slice(0, 3).map(issue => `${issue.path.map(String).join('.') || 'result'}: ${issue.message}`).join('; ') + (issues.length > 3 ? ` (+${issues.length - 3} more)` : '');
+    return error instanceof Error ? error.message : String(error);
+  }
 }
 export interface Client {
   listProviders?(cwd: string): Promise<ProviderOption[]>;
@@ -127,7 +141,7 @@ export class CliClient implements Client {
   async run(assignment: Assignment, prompt: string, options: ProcessOptions & {
     session?: string; mode?: 'read' | 'write'; stage?: Stage; projectRoot?: string; capabilities?: Capabilities; onSession?: (session: string) => void;
   }): Promise<StageResult> {
-    let result: StageResult | undefined, complete = false, error: string | undefined, kind: ErrorKind | undefined, fatal = false, retryAt: string | undefined;
+    let result: StageResult | undefined, invalid: string | undefined, complete = false, error: string | undefined, kind: ErrorKind | undefined, fatal = false, retryAt: string | undefined;
     const temp = mkdtempSync(join(tmpdir(), 'easy-skills-client-'));
     const settingsPath = assignment.provider === 'claude-code' ? join(temp, 'settings.json') : undefined;
     const schemaPath = join(temp, 'output-schema.json'), lastMessagePath = join(temp, 'final.json');
@@ -156,17 +170,22 @@ export class CliClient implements Client {
         if (event.session && options.session && options.session !== event.session) throw new ClientError('protocol', 'CLI resumed a different session; refusing its result');
         if (event.session) options.onSession?.(event.session);
         if (event.result) result = event.result;
+        if (event.invalid) invalid = event.invalid;
         if (event.complete) {complete = true; if (!fatal) {error = undefined; kind = undefined;}}
         if (event.error) {error = event.error; kind = event.kind; fatal ||= event.fatal === true;}
         if (event.retryAt) retryAt = event.retryAt;
       },
     });
-    if (assignment.provider === 'codex' && existsSync(lastMessagePath)) result = parseResult(readFileSync(lastMessagePath, 'utf8'));
+    if (assignment.provider === 'codex' && existsSync(lastMessagePath)) {
+      const text = readFileSync(lastMessagePath, 'utf8');
+      result = parseResult(text); invalid = result ? undefined : invalidReason(text);
+    }
     } finally {rmSync(temp, {recursive: true, force: true});}
     if (error || response.code !== 0 || response.timedOut) {
       const detail = error || response.stderr || response.stdout || (response.timedOut ? 'Client timed out' : 'Client exited without result');
       throw new ClientError(kind || (/Corrupt JSON/.test(detail) ? 'protocol' : classify(detail)), detail, retryAt);
     }
+    if (complete && !result && invalid) throw new InvalidResult(invalid);
     if (!complete || !result) throw new ClientError('protocol', 'Client exited without a validated structured final result; possible refusal or unsupported CLI protocol');
     // Organization policy can be refreshed during a session; never accept work produced after hooks appeared.
     if (assignment.provider === 'claude-code' && this.runner === execute) await restrictClaude(clientCommand('claude-code', options.cwd), options.cwd);
