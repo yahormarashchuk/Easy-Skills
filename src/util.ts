@@ -43,6 +43,29 @@ function ruleText(root: string, path: string): string {
   const bytes = readFileSync(file);
   return bytes.includes(0) ? 'binary:sha256:' + createHash('sha256').update(bytes).digest('hex') : bytes.toString('utf8');
 }
+/** Instruction and client-control files anywhere in the checkout that can affect any later worktree stage. */
+export function instructionPaths(root: string): string[] {
+  const paths: string[] = [];
+  function visit(dir: string) {
+    for (const entry of readdirSync(join(root, dir), {withFileTypes: true})) {
+      if (['.git', 'node_modules', '__pycache__', '.venv'].includes(entry.name)) continue;
+      const p = join(dir, entry.name), normalized = p.replaceAll('\\', '/');
+      if (entry.isSymbolicLink()) {
+        if (['AGENTS.md', 'CLAUDE.md', '.codex', '.claude', '.mcp.json'].includes(entry.name)) throw new Error('Symlink in protected instructions: ' + p);
+        continue;
+      }
+      if (entry.isDirectory()) {
+        // Nested worktrees and repositories (Claude Code creates them under .claude/worktrees/) are not this checkout's rules.
+        if (/(?:^|\/)\.claude\/worktrees$/.test(normalized) || existsSync(join(root, p, '.git'))) continue;
+        visit(p);
+      }
+      else if (['AGENTS.md', 'CLAUDE.md', '.mcp.json'].includes(entry.name) || /(?:^|\/)\.codex\//.test(normalized) || CLAUDE_CONTROL.test(normalized))
+        paths.push(normalized);
+    }
+  }
+  visit('');
+  return paths;
+}
 export function rulesHash(root: string, overlay: Record<string, string> = {}): string {
   const entries: Record<string, string> = {};
   function walk(dir: string) {
@@ -62,25 +85,7 @@ export function rulesHash(root: string, overlay: Record<string, string> = {}): s
     catch (e) {if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;}
   }
   walk('.easy-skills/rules');
-  // Include instructions and client controls that can affect any later worktree stage.
-  function instructions(dir: string) {
-    for (const entry of readdirSync(join(root, dir), {withFileTypes: true})) {
-      if (['.git', 'node_modules', '__pycache__', '.venv'].includes(entry.name)) continue;
-      const p = join(dir, entry.name), normalized = p.replaceAll('\\', '/');
-      if (entry.isSymbolicLink()) {
-        if (['AGENTS.md', 'CLAUDE.md', '.codex', '.claude', '.mcp.json'].includes(entry.name)) throw new Error('Symlink in protected instructions: ' + p);
-        continue;
-      }
-      if (entry.isDirectory()) {
-        // Nested worktrees and repositories (Claude Code creates them under .claude/worktrees/) are not this checkout's rules.
-        if (/(?:^|\/)\.claude\/worktrees$/.test(normalized) || existsSync(join(root, p, '.git'))) continue;
-        instructions(p);
-      }
-      else if (['AGENTS.md', 'CLAUDE.md', '.mcp.json'].includes(entry.name) || /(?:^|\/)\.codex\//.test(normalized) || CLAUDE_CONTROL.test(normalized))
-        entries[normalized] = ruleText(root, p);
-    }
-  }
-  instructions('');
+  for (const path of instructionPaths(root)) entries[path] = ruleText(root, path);
   for (const [path, text] of Object.entries(overlay)) if (path.startsWith('.easy-skills/rules/')) entries[path] = text;
   return hash(Object.fromEntries(Object.entries(entries).map(([path, text]) => [path, text.replaceAll('\r\n', '\n')])));
 }

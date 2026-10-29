@@ -211,6 +211,7 @@ export class Engine {
       if (carried.length) await git.commit(run.worktree, 'Add uncommitted task inputs from the source checkout');
       this.store.save(run, 'integration.created', carried.length ? {carried} : {});
     }
+    await git.carryIgnoredControls(run.root, run.worktree);
     await this.guard(run, run.worktree);
     await this.setup(run, git, run.worktree);
     if (!this.store.operation(`${run.id}:baseline`)) {
@@ -443,6 +444,7 @@ export class Engine {
       this.store.save(run, 'task.worktree.created', {task: task.id});
     }
     const cwd = state.worktree;
+    await git.carryIgnoredControls(run.root, cwd);
     await this.guard(run, cwd); await this.setup(run, git, cwd);
     while (!state.integrated) {
       this.checkpoint(run);

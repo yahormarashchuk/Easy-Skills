@@ -63,6 +63,12 @@ repository's `core.longpaths` is set to `true` first, because task worktrees liv
 under the state directory. If Git has no `user.name`/`user.email`, task commits use the
 signed-in GitHub account's name and no-reply address.
 
+Instruction and client-control files that Git ignores in the source checkout, such as
+generated `.claude/skills/` copies or `.claude/settings.local.json`, are bound by the
+approved rules hash but can never come from a commit. Before every guard of a task
+worktree they are copied from the source checkout, so each stage uses the same
+instructions the plan was approved with. Being ignored, they never enter a commit.
+
 Direct BUILD enters the existing final SYNC, VERIFY, REVIEW and SHIP machine. Baseline
 evidence, setup/resource locks, protected controls, complete file review coverage,
 bounded repairs, commit intents, worker locks and network reconciliation still apply.
