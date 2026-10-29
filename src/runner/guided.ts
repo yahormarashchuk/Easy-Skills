@@ -313,6 +313,8 @@ export class Guided {
     }
     this.ui.say('Discovering project structure and maintained examples. No project checks are run during onboarding.');
     const discovery = await discover(root, this.store);
+    // The approval binds the rules hash; fail before the owner interview if it cannot be computed.
+    rulesHash(root);
     const current = existsSync(join(root, '.easy-skills/project.yaml')) ? loadProject(root) : undefined;
     // Owner answers are keyed without the fingerprint so tracking a file or committing does not discard them.
     const interviewKey = 'onboarding:' + hash({root, update});

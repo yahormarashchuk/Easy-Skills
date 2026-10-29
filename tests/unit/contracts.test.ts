@@ -69,3 +69,47 @@ test('canonical hashes ignore key order; rule edits invalidate snapshots', () =>
     assert.notEqual(rulesHash(dir), before);
   } finally {rmSync(dir, {recursive: true, force: true});}
 });
+function write(root: string, path: string, content: string | Buffer) {mkdirSync(join(root, path, '..'), {recursive: true}); writeFileSync(join(root, path), content);}
+const ordinary: Record<string, string> = {'AGENTS.md': 'Use focused tests.\r\n', 'CLAUDE.md': 'Prefer small diffs.\n', '.easy-skills/rules/testing.md': 'Run tests',
+  '.claude/settings.json': '{"permissions":{}}', '.claude/skills/build/SKILL.md': 'Build skill', '.claude/commands/ship.md': 'Ship', '.mcp.json': '{"mcpServers":{}}',
+  '.codex/config.toml': 'model = "exact"', 'src/AGENTS.md': 'Nested instructions'};
+test('rules hash of an ordinary repository keeps its saved format', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'easy-hash-'));
+  try {
+    for (const [path, text] of Object.entries(ordinary)) write(dir, path, text);
+    // Saved agreements compare against this exact map of normalized text.
+    assert.equal(rulesHash(dir), hash(Object.fromEntries(Object.entries(ordinary).map(([path, text]) => [path, text.replaceAll('\r\n', '\n')]))));
+  } finally {rmSync(dir, {recursive: true, force: true});}
+});
+test('rules hash skips nested worktrees and non-control client files without reading them', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'easy-hash-'));
+  try {
+    for (const [path, text] of Object.entries(ordinary)) write(dir, path, text);
+    const before = rulesHash(dir), large = Buffer.alloc(300_000, 1); large[10] = 0;
+    write(dir, '.claude/worktrees/feature/.git', 'gitdir: ../../../.git/worktrees/feature');
+    write(dir, '.claude/worktrees/feature/AGENTS.md', 'x'.repeat(300_000));
+    write(dir, '.claude/worktrees/feature/.claude/settings.json', '{}');
+    write(dir, '.claude/worktrees/feature/bin/app.dll', large);
+    write(dir, '.claude/worktrees/build.log', 'x'.repeat(300_000));
+    write(dir, '.worktrees/other/.git', 'gitdir: elsewhere'); write(dir, '.worktrees/other/CLAUDE.md', 'Other checkout');
+    write(dir, 'vendor/lib/.git/HEAD', 'ref: refs/heads/main'); write(dir, 'vendor/lib/AGENTS.md', 'Vendored rules');
+    write(dir, '.claude/state/decisions.md', 'x'.repeat(300_000)); write(dir, '.claude/launch.json', '{}');
+    assert.equal(rulesHash(dir), before);
+  } finally {rmSync(dir, {recursive: true, force: true});}
+});
+test('rules hash binds instruction and control changes and refuses oversized controls by name', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'easy-hash-'));
+  try {
+    for (const [path, text] of Object.entries(ordinary)) write(dir, path, text);
+    for (const path of [...Object.keys(ordinary), '.claude/settings.local.json', '.claude/agents/reviewer.md', '.claude/hooks/check.sh', 'pkg/.claude/skills/x/SKILL.md']) {
+      const before = rulesHash(dir); write(dir, path, 'Changed ' + path);
+      assert.notEqual(rulesHash(dir), before, path);
+    }
+    const asset = Buffer.from([0, 1, 2]);
+    write(dir, '.claude/skills/build/asset.bin', asset); const binary = rulesHash(dir);
+    asset[2] = 3; write(dir, '.claude/skills/build/asset.bin', asset);
+    assert.notEqual(rulesHash(dir), binary);
+    write(dir, '.claude/settings.json', 'x'.repeat(256_001));
+    assert.throws(() => rulesHash(dir), /exceeds 256000 bytes: \.claude\/settings\.json/);
+  } finally {rmSync(dir, {recursive: true, force: true});}
+});

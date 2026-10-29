@@ -43,7 +43,7 @@ export function requireAgreement(root: string, binding?: {version: number; hash:
   if (!existsSync(path)) throw new Error('Rules agreement missing: complete onboarding and review a replacement plan; existing runs are preserved');
   const agreement = Interview.parse(JSON.parse(readFileSync(path, 'utf8')));
   if (agreement.status !== 'agreed' || agreement.conflicts.length || agreement.decisions.some(d => d.status !== 'resolved' || !d.answer?.trim())) throw new Error('Onboarding rules agreement is still a draft or unresolved');
-  if (agreement.rulesHash !== rulesHash(root)) throw new Error('Rules agreement is stale after rule changes');
+  if (agreement.rulesHash !== rulesHash(root)) throw new Error('Rules agreement is stale after changes to project instructions or client controls; run easy-skills init to review and re-approve the rules');
   if (agreement.projectHash !== hash(readFileSync(join(root, '.easy-skills/project.yaml'), 'utf8'))) throw new Error('Project configuration changed after rules agreement');
   const current = {version: agreement.version, hash: hash(agreement)};
   if (binding && (binding.version !== current.version || binding.hash !== current.hash)) throw new Error('Plan rules agreement revision is stale');

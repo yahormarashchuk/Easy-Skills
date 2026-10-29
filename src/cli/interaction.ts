@@ -8,6 +8,7 @@ import { resolveChoice, type Choice } from './choices.js';
 import { Provider } from '../contracts.js';
 import { interviewQuestion, stageBanner, stageColor, useColor, useUnicode } from './presentation.js';
 import { ActivityView } from './activity.js';
+import { PastedAnswer } from './paste.js';
 import type { Assignment, Stage } from '../contracts.js';
 import type { ProviderOption } from '../adapters/index.js';
 
@@ -16,6 +17,7 @@ const Script = z.record(z.string(), z.union([z.string(), z.boolean()]));
 export class TerminalInteraction implements Interaction {
   private answers?: z.infer<typeof Script>;
   private terminal?: ReturnType<typeof createInterface>;
+  private pasted?: PastedAnswer;
   private interviewCount = 0;
   private view?: ActivityView;
   constructor(readonly options: {answers?: string; nonInteractive?: boolean} = {}) {
@@ -36,14 +38,24 @@ export class TerminalInteraction implements Interaction {
     if (this.options.nonInteractive || this.answers || !stdin.isTTY || !stdout.isTTY)
       throw new Error(`Input required (${id}): ${question}. Use an interactive terminal or --non-interactive --answers FILE with explicit answers and approvals.`);
     this.terminal ||= createInterface({input: stdin, output: stdout});
-    const answer = (await this.terminal.question(question + (fallback ? ` [${fallback}]` : '') + ': ')).trim();
-    stdout.write('\n');
+    this.terminal.setPrompt(question + (fallback ? ` [${fallback}]` : '') + ': ');
+    this.terminal.prompt();
+    const answer = (await (this.pasted ||= new PastedAnswer(this.terminal, stdin)).next()).trim();
+    stdout.write(answer.includes('\n') ? `(${answer.split('\n').length} lines received as one answer)\n\n` : '\n');
     return answer;
   }
   async ask(id: string, question: string, fallback?: string) {
     if (id.startsWith('interview:') && !this.answers && !this.options.nonInteractive && stdin.isTTY && stdout.isTTY) {
       this.say(interviewQuestion(question, ++this.interviewCount, stdout.columns, useColor(stdout.isTTY)));
-      question = 'Your answer';
+      /** The answer is shown back and only recorded once the owner confirms it; otherwise the same question is asked again. */
+      while (true) {
+        const reply = String(await this.input(id, 'Your answer'));
+        if (!reply) {this.say('An answer is required. Type or paste it again.'); continue;}
+        this.say('Your answer:\n' + reply.split('\n').map(line => '  ' + line).join('\n'));
+        const check = String(await this.input(id + ':confirm', 'Use this answer? Enter = yes, n = enter it again')).toLowerCase();
+        if (!/^(?:n|no)$/.test(check)) return reply;
+        this.say('Answer discarded. Same question again.');
+      }
     }
     const answer = await this.input(id, question, fallback);
     if (typeof answer !== 'string') throw new Error('Expected text for ' + id);
