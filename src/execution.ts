@@ -41,13 +41,28 @@ export function trustedExecutable(name: string, cwd: string): string {
     throw new Error('Executable is outside trusted installation directories: ' + name);
   return file;
 }
+/**
+ * The PATH of the owner who started Easy Skills, carried through the detached supervisor. Approved project commands
+ * (dotnet, python, pwsh) resolve against it after the trusted directories. Relative entries and Windows app execution
+ * aliases (Store stubs such as python.exe) are left out.
+ */
+function ownerPath(source: NodeJS.ProcessEnv): string[] {
+  return (source.EASY_SKILLS_OWNER_PATH ?? source.PATH ?? source.Path ?? '').split(delimiter)
+    .filter(dir => isAbsolute(dir) && !/[\\/]Microsoft[\\/]WindowsApps[\\/]?$/i.test(dir) && existsSync(dir));
+}
 export function projectExecutable(command: string, cwd: string, env: NodeJS.ProcessEnv): string {
   if (isAbsolute(command) || command.includes('/') || command.includes('\\')) return resolve(cwd, command);
   if (command === 'node') return realpathSync.native(process.execPath);
-  // Repository commands require an explicit path in the approved configuration.
-  const file = candidates(command, (env.PATH || env.Path || '').split(delimiter).filter(isAbsolute))[0];
-  if (!file) throw new Error('Approved project executable unavailable: ' + command);
-  return file;
+  // A directory inside the working tree can never supply an approved command.
+  const directories = (env.PATH || env.Path || '').split(delimiter).filter(dir => isAbsolute(dir) && !within(cwd, dir));
+  const file = candidates(command, directories)[0];
+  if (file) return file;
+  // CI files commonly name PowerShell 7; without it, Windows' built-in PowerShell runs the same check.
+  if (process.platform === 'win32' && /^pwsh(?:\.exe)?$/i.test(command)) {
+    const builtIn = candidates('powershell', [join(env.SystemRoot || process.env.SystemRoot || 'C:/Windows', 'System32/WindowsPowerShell/v1.0'), ...directories])[0];
+    if (builtIn) return builtIn;
+  }
+  throw new Error('Approved project executable unavailable: ' + command);
 }
 export function childEnvironment(role: ProcessRole, source: NodeJS.ProcessEnv = process.env, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const config = configuration();
@@ -62,7 +77,10 @@ export function childEnvironment(role: ProcessRole, source: NodeJS.ProcessEnv = 
   for (const name of names) if (source[name] !== undefined) env[name] = source[name];
   // Explicit values come only from approved configuration, never a repository's environment file.
   Object.assign(env, extra);
-  delete env.Path; env.PATH = [...new Set([dirname(process.execPath), ...trustedDirectories()])].join(delimiter);
+  const owner = ownerPath(source);
+  if (role === 'supervisor') env.EASY_SKILLS_OWNER_PATH = owner.join(delimiter);
+  // Only project commands and their MCP servers use the owner's toolchain; runner tools stay on trusted directories.
+  delete env.Path; env.PATH = [...new Set([dirname(process.execPath), ...trustedDirectories(), ...(role === 'project' || role === 'mcp' ? owner : [])])].join(delimiter);
   if (role !== 'notification' && role !== 'supervisor' && config.smtp?.passwordEnv) delete env[config.smtp.passwordEnv];
   return env;
 }
