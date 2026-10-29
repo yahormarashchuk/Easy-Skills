@@ -17,12 +17,36 @@ export function useColor(isTTY: boolean | undefined, env: NodeJS.ProcessEnv = pr
   return !!isTTY && env.NO_COLOR === undefined && env.TERM !== 'dumb';
 }
 
-export function stageBanner(stage: DisplayStage, context: 'model' | 'current', color = false): string {
+/** Legacy Windows consoles lack progress glyphs; Windows Terminal, VS Code and JetBrains terminals have them. */
+export function useUnicode(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env): boolean {
+  if (platform !== 'win32') return env.TERM !== 'linux';
+  return !!env.WT_SESSION || env.TERM_PROGRAM === 'vscode' || env.TERMINAL_EMULATOR === 'JetBrains-JediTerm' || env.ConEmuTask === '{cmd::Cmder}' || /^(?:xterm-256color|alacritty)$/.test(env.TERM || '');
+}
+
+export function stageColor(name: string): number {
+  return details[name as DisplayStage]?.color ?? 36;
+}
+
+// Stages outside the six-step pipeline are shown at the pipeline step they belong to.
+const pipelineStep: Record<DisplayStage, Stage> = {DEFINE: 'DEFINE', PLAN: 'PLAN', BUILD: 'BUILD', VERIFY: 'VERIFY', REVIEW: 'REVIEW', SHIP: 'SHIP',
+  REPAIR: 'BUILD', SYNC: 'VERIFY', INTEGRATE: 'SHIP'};
+
+/** One line showing finished, current and upcoming pipeline steps. */
+export function stepTracker(stage: DisplayStage, color = false, unicode = false): string {
+  const current = Stage.options.indexOf(pipelineStep[stage]);
+  const [done, active, next, joint] = unicode ? ['✔', '●', '○', ' ── '] : ['[x]', '[>]', '[ ]', ' - '];
+  const paint = (code: string, text: string) => color ? `\u001b[${code}m${text}\u001b[0m` : text;
+  return Stage.options.map((name, i) => (i ? paint(i <= current ? '32' : '90', joint) : '') +
+    (i < current ? paint('32', done + ' ' + name) : i === current ? paint(`1;${details[stage].color}`, active + ' ' + name) : paint('90', next + ' ' + name))).join('');
+}
+
+export function stageBanner(stage: DisplayStage, context: 'model' | 'current', color = false, unicode = false): string {
   const position = Stage.options.indexOf(stage as Stage);
   const title = context === 'model' && position >= 0 ? `[${position + 1}/${Stage.options.length}] MODEL SETUP: ${stage}` : `CURRENT STAGE: ${stage}`;
   const line = `---------- ${title} ----------`;
   const heading = color ? `\u001b[1;${details[stage].color}m${line}\u001b[0m` : line;
-  return `${heading}\n  ${details[stage].description}\n${'-'.repeat(Math.min(line.length, 70))}`;
+  const tracker = context === 'current' ? `\n  ${stepTracker(stage, color, unicode)}` : '';
+  return `${heading}\n  ${details[stage].description}${tracker}\n${'-'.repeat(Math.min(line.length, 70))}`;
 }
 
 /** Preserve question text while adding line breaks at spaces for easier reading. */
