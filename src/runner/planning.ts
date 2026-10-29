@@ -18,7 +18,7 @@ export const FeatureRequest = z.object({featureId: Identifier, title: z.string()
   workflow: DirectWorkflow.optional(),
   repairPolicy: z.object({maxCompletedAttempts: z.number().int().min(0).max(100)}).strict().default({maxCompletedAttempts: 3})}).strict();
 /** Read-only planning uses the assigned PLAN model, before approval or publication. */
-export async function generatePlan(store: Store, root: string, input: unknown, client: Client = new CliClient(), previous?: {worktree: string; plan: Plan; head: string}, cacheDraft = false) {
+export async function generatePlan(store: Store, root: string, input: unknown, client: Client = new CliClient(), previous?: {worktree: string; plan: Plan; head: string}, cacheDraft = false, onLine?: (line: string) => void) {
   const request = FeatureRequest.parse(input), project = loadProject(root), identity = await new Git(root).identity();
   await requireCompatibility(store, client, request.assignments.PLAN, root);
   if (project.schemaVersion !== 2) throw new Error('Project v2 setup/protected-input configuration must be reviewed before new plans');
@@ -40,7 +40,7 @@ ${JSON.stringify(seed)}
 ${seed.workflow ? 'Direct mode: return exactly ONE independent task, with explicit repository-relative scope.paths covering implementation and regression tests. Inspect the bound workflow.baseHead with read-only git show if the source checkout differs. Do not switch branches or decompose into intermediate Issues or PRs.' : 'Advanced feature mode: decompose only when meaningful dependencies require it.'}
 Preserve specification, project, exact assignments, permissions, rules hash and package versions. Return the complete plan serialized as a JSON string in planJson of the structured result. No approval is implied.`);
     const cached = cacheDraft ? store.operation<Plan>(key + ':draft') : undefined;
-    const result = cached ? {outcome: 'passed', plan: cached, summary: 'Saved unapproved technical plan'} : await client.run(request.assignments.PLAN, prompt, {cwd: previous?.worktree || identity.root, projectRoot: identity.root, mode: 'read', stage: 'PLAN', session: saved?.session,
+    const result = cached ? {outcome: 'passed', plan: cached, summary: 'Saved unapproved technical plan'} : await client.run(request.assignments.PLAN, prompt, {cwd: previous?.worktree || identity.root, projectRoot: identity.root, mode: 'read', stage: 'PLAN', session: saved?.session, onLine,
       onSpawn: pid => store.recordOperation(key, run.id, 'planning.session', {...store.operation<object>(key), pid, identity: processIdentity(pid)}),
       onSession: session => store.recordOperation(key, run.id, 'planning.session', {...store.operation<object>(key), session}),
     });

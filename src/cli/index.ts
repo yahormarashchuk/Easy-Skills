@@ -27,7 +27,7 @@ import { bootstrap } from './bootstrap.js';
 import { childEnvironment } from '../execution.js';
 import { Guided, resolveRun } from '../runner/guided.js';
 import { TerminalInteraction } from './interaction.js';
-import { stageBanner, useColor } from './presentation.js';
+import { stageBanner, useColor, useUnicode } from './presentation.js';
 
 const program = new Command().name('easy-skills').version(VERSION).description('Local engineering workflow runner (alpha)');
 program.option('--project <path>', 'Project directory', process.cwd());
@@ -47,7 +47,7 @@ async function guided<T>(opts: {answers?: string; nonInteractive?: boolean}, fn:
 function summary(run: import('../contracts.js').Run) {
   const stage = run.tasks.find(t => !t.integrated)?.cursor || run.finalPhase;
   return `${run.plan.workflow?.issue ? 'Task #' + run.plan.workflow.issue : run.plan.title}: ${run.status}\n` +
-    (run.status === 'ready' ? `Ready for review: ${run.finalPr?.url}\nChecks: passed at ${run.finalReviewHead}\nReview: passed. Final merge: manual.` : stageBanner(stage, 'current', useColor(process.stdout.isTTY))) +
+    (run.status === 'ready' ? `Ready for review: ${run.finalPr?.url}\nChecks: passed at ${run.finalReviewHead}\nReview: passed. Final merge: manual.` : stageBanner(stage, 'current', useColor(process.stdout.isTTY), !!process.stdout.isTTY && useUnicode())) +
     (run.reason ? '\n' + run.reason : '') + (run.pendingDecision ? '\nDecision: ' + run.pendingDecision.question : '');
 }
 function start(store: Store, id: string) {

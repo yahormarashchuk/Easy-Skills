@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { interviewQuestion, stageBanner, useColor } from '../../src/cli/presentation.js';
+import { interviewQuestion, stageBanner, stepTracker, useColor, useUnicode } from '../../src/cli/presentation.js';
 
 test('stage headings identify setup position and runtime stage without relying on color', () => {
   assert.match(stageBanner('BUILD', 'model'), /\[3\/6\] MODEL SETUP: BUILD/);
@@ -13,6 +13,17 @@ test('stage headings identify setup position and runtime stage without relying o
   assert.equal(useColor(false, {}), false);
   assert.equal(useColor(true, {NO_COLOR: '1'}), false);
   assert.equal(useColor(true, {TERM: 'dumb'}), false);
+});
+
+test('the step tracker marks finished, current and upcoming stages with an ASCII fallback', () => {
+  assert.equal(stepTracker('VERIFY'), '[x] DEFINE - [x] PLAN - [x] BUILD - [>] VERIFY - [ ] REVIEW - [ ] SHIP');
+  assert.equal(stepTracker('REPAIR'), '[x] DEFINE - [x] PLAN - [>] BUILD - [ ] VERIFY - [ ] REVIEW - [ ] SHIP');
+  assert.equal(stepTracker('DEFINE', false, true), '● DEFINE ── ○ PLAN ── ○ BUILD ── ○ VERIFY ── ○ REVIEW ── ○ SHIP');
+  assert.match(stageBanner('PLAN', 'current'), /\n  \[x\] DEFINE - \[>\] PLAN/);
+  assert.doesNotMatch(stageBanner('PLAN', 'model'), /\[>\]/);
+  assert.equal(useUnicode('win32', {}), false);
+  assert.equal(useUnicode('win32', {WT_SESSION: '1'}), true);
+  assert.equal(useUnicode('linux', {TERM: 'xterm-256color'}), true);
 });
 
 test('interview questions have a clear header, readable wrapping and an uncolored fallback', () => {
