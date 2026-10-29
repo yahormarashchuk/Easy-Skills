@@ -129,6 +129,12 @@ and can be disabled with `NO_COLOR`; redirected output remains readable without 
 | `task:approve` | Approve exact displayed execution/revision proposal |
 | `install:approve` | Install displayed packaged skills with backups |
 
+In an interactive terminal each interview answer is a single answer however many lines
+it has: pasted text (Markdown, lists, blank lines) is collected until the input has
+been quiet for 250 ms (`EASY_SKILLS_PASTE_MS` changes this). The answer is then shown
+back and recorded only after confirmation: Enter accepts it, `n` discards it and asks
+the same question again.
+
 Question IDs are model-derived. Fully scripted operation needs answers to the actual
 questions. Declining execution leaves local interview/planning records but creates
 no branch, Issue or PR.
