@@ -28,6 +28,21 @@ export function rejectSymlinkPath(root: string, target: string): void {
     path = dirname(path);
   }
 }
+const RULE_FILE_LIMIT = 256_000;
+/**
+ * Project `.claude/` content that Claude Code loads as instructions, settings, commands,
+ * subagents, skills, hook scripts, output styles or rules. Anything else there (worktrees,
+ * logs, local state) never steers a stage and is left out. `.codex/` holds only client
+ * configuration (Codex state lives in CODEX_HOME), so all of it stays bound.
+ */
+const CLAUDE_CONTROL = /(?:^|\/)\.claude\/(?:CLAUDE\.md|settings(?:\.local)?\.json|(?:commands|agents|skills|hooks|output-styles|rules)\/.+)$/;
+/** Text is bound as read; binary content by digest, so it is never decoded as text. */
+function ruleText(root: string, path: string): string {
+  const file = join(root, path);
+  if (lstatSync(file).size > RULE_FILE_LIMIT) throw new Error(`Project instruction or client control file exceeds ${RULE_FILE_LIMIT} bytes: ${path.replaceAll('\\', '/')}. Shrink it or move it out of the instruction paths, then retry.`);
+  const bytes = readFileSync(file);
+  return bytes.includes(0) ? 'binary:sha256:' + createHash('sha256').update(bytes).digest('hex') : bytes.toString('utf8');
+}
 export function rulesHash(root: string, overlay: Record<string, string> = {}): string {
   const entries: Record<string, string> = {};
   function walk(dir: string) {
@@ -35,14 +50,14 @@ export function rulesHash(root: string, overlay: Record<string, string> = {}): s
       for (const entry of readdirSync(join(root, dir), {withFileTypes: true})) {
         const p = join(dir, entry.name);
         if (lstatSync(join(root, p)).isSymbolicLink()) throw new Error('Symlink in project rules: ' + p);
-        if (entry.isDirectory()) walk(p); else entries[p.replaceAll('\\', '/')] = readFileSync(join(root, p), 'utf8');
+        if (entry.isDirectory()) walk(p); else entries[p.replaceAll('\\', '/')] = ruleText(root, p);
       }
     } catch (e) {if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;}
   }
   for (const name of ['AGENTS.md', 'CLAUDE.md']) {
     try {
       if (lstatSync(join(root, name)).isSymbolicLink()) throw new Error('Symlink in project instructions: ' + name);
-      entries[name] = readFileSync(join(root, name), 'utf8');
+      entries[name] = ruleText(root, name);
     }
     catch (e) {if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;}
   }
@@ -56,9 +71,13 @@ export function rulesHash(root: string, overlay: Record<string, string> = {}): s
         if (['AGENTS.md', 'CLAUDE.md', '.codex', '.claude', '.mcp.json'].includes(entry.name)) throw new Error('Symlink in protected instructions: ' + p);
         continue;
       }
-      if (entry.isDirectory()) instructions(p);
-      else if (['AGENTS.md', 'CLAUDE.md', '.mcp.json'].includes(entry.name) || /(?:^|\/)\.(?:codex|claude)\//.test(normalized))
-        entries[normalized] = readFileSync(join(root, p), 'utf8');
+      if (entry.isDirectory()) {
+        // Nested worktrees and repositories (Claude Code creates them under .claude/worktrees/) are not this checkout's rules.
+        if (/(?:^|\/)\.claude\/worktrees$/.test(normalized) || existsSync(join(root, p, '.git'))) continue;
+        instructions(p);
+      }
+      else if (['AGENTS.md', 'CLAUDE.md', '.mcp.json'].includes(entry.name) || /(?:^|\/)\.codex\//.test(normalized) || CLAUDE_CONTROL.test(normalized))
+        entries[normalized] = ruleText(root, p);
     }
   }
   instructions('');
