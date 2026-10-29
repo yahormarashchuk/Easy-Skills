@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execute } from '../../src/process.js';
-import { childEnvironment, trustedExecutable, clientCommand } from '../../src/execution.js';
+import { childEnvironment, trustedExecutable, clientCommand, projectExecutable } from '../../src/execution.js';
 import { restrictCodex, classify } from '../../src/adapters/index.js';
 import { Gh } from '../../src/github/index.js';
 import { githubRepository } from '../../src/git/remotes.js';
@@ -94,4 +94,43 @@ test('remote validation checks exact host and every effective fetch/push destina
     await f.git.run(['config', 'url.https://evil.invalid/.pushInsteadOf', 'https://github.com/']);
     await assert.rejects(f.git.validateRemotes(), /Effective origin/);
   } finally {await f.dispose();}
+});
+
+test('project commands find the owner toolchain through the supervisor, never from the working tree or app aliases', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'easy owner path ')), tools = join(dir, 'dotnet'), repo = join(dir, 'repo'), planted = join(repo, 'bin'), aliases = join(dir, 'Microsoft', 'WindowsApps');
+  try {
+    for (const folder of [tools, planted, aliases]) {
+      mkdirSync(folder, {recursive: true});
+      for (const name of ['owner-tool', 'owner-tool.exe']) writeFileSync(join(folder, name), '');
+    }
+    const source = {PATH: [planted, aliases, tools, 'relative'].join(delimiter)};
+    const project = childEnvironment('project', source).PATH!.split(delimiter);
+    assert.ok(project.includes(tools));
+    assert.ok(!project.includes(aliases));
+    assert.ok(!project.includes('relative'));
+    assert.ok(!childEnvironment('git', source).PATH!.split(delimiter).includes(tools));
+    assert.ok(!childEnvironment('client', source).PATH!.split(delimiter).includes(tools));
+    const expected = join(tools, process.platform === 'win32' ? 'owner-tool.exe' : 'owner-tool');
+    assert.equal(projectExecutable('owner-tool', repo, childEnvironment('project', source)), expected);
+    const supervisor = childEnvironment('supervisor', source);
+    assert.ok(!supervisor.PATH!.split(delimiter).includes(tools));
+    assert.equal(projectExecutable('owner-tool', repo, childEnvironment('project', supervisor)), expected);
+    assert.throws(() => projectExecutable('missing-tool', repo, childEnvironment('project', supervisor)), /Approved project executable unavailable: missing-tool/);
+  } finally {rmSync(dir, {recursive: true, force: true});}
+});
+
+test('a missing pwsh runs with Windows PowerShell; other missing commands still fail', {skip: process.platform !== 'win32'}, () => {
+  const env = {PATH: '', SystemRoot: process.env.SystemRoot};
+  assert.match(projectExecutable('pwsh', process.cwd(), env), /[\\/]WindowsPowerShell[\\/]v1\.0[\\/]powershell\.exe$/i);
+  assert.throws(() => projectExecutable('dotnet-missing', process.cwd(), env), /Approved project executable unavailable: dotnet-missing/);
+});
+
+test('project commands keep standard Windows locations and never reuse MSBuild nodes', () => {
+  const source = {'ProgramFiles(x86)': 'C:\Program Files (x86)', ProgramData: 'C:\ProgramData', SECRET_TOKEN: 'fixture'};
+  const project = childEnvironment('project', source);
+  assert.equal(project['ProgramFiles(x86)'], 'C:\Program Files (x86)');
+  assert.equal(project.ProgramData, 'C:\ProgramData');
+  assert.equal(project.SECRET_TOKEN, undefined);
+  assert.equal(project.MSBUILDDISABLENODEREUSE, '1');
+  assert.equal(childEnvironment('git', source).MSBUILDDISABLENODEREUSE, undefined);
 });
