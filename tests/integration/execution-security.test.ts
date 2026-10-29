@@ -124,3 +124,13 @@ test('a missing pwsh runs with Windows PowerShell; other missing commands still 
   assert.match(projectExecutable('pwsh', process.cwd(), env), /[\\/]WindowsPowerShell[\\/]v1\.0[\\/]powershell\.exe$/i);
   assert.throws(() => projectExecutable('dotnet-missing', process.cwd(), env), /Approved project executable unavailable: dotnet-missing/);
 });
+
+test('project commands keep standard Windows locations and never reuse MSBuild nodes', () => {
+  const source = {'ProgramFiles(x86)': 'C:\Program Files (x86)', ProgramData: 'C:\ProgramData', SECRET_TOKEN: 'fixture'};
+  const project = childEnvironment('project', source);
+  assert.equal(project['ProgramFiles(x86)'], 'C:\Program Files (x86)');
+  assert.equal(project.ProgramData, 'C:\ProgramData');
+  assert.equal(project.SECRET_TOKEN, undefined);
+  assert.equal(project.MSBUILDDISABLENODEREUSE, '1');
+  assert.equal(childEnvironment('git', source).MSBUILDDISABLENODEREUSE, undefined);
+});

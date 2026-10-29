@@ -67,7 +67,10 @@ export function projectExecutable(command: string, cwd: string, env: NodeJS.Proc
 export function childEnvironment(role: ProcessRole, source: NodeJS.ProcessEnv = process.env, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const config = configuration();
   const names = ['SystemRoot', 'WINDIR', 'COMSPEC', 'PATHEXT', 'TEMP', 'TMP', 'TMPDIR', 'HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH',
-    'LOCALAPPDATA', 'APPDATA', 'LANG', 'LC_ALL', 'TERM', 'NUMBER_OF_PROCESSORS'];
+    'LOCALAPPDATA', 'APPDATA', 'LANG', 'LC_ALL', 'TERM', 'NUMBER_OF_PROCESSORS',
+    // Standard Windows locations, not secrets: NuGet and MSBuild fail ("Value cannot be null") without them.
+    'ProgramFiles', 'ProgramFiles(x86)', 'ProgramW6432', 'CommonProgramFiles', 'CommonProgramFiles(x86)', 'CommonProgramW6432',
+    'ProgramData', 'ALLUSERSPROFILE', 'PUBLIC', 'SystemDrive', 'USERNAME', 'USERDOMAIN', 'COMPUTERNAME', 'OS', 'PROCESSOR_ARCHITECTURE'];
   if (role === 'client') names.push('CODEX_HOME', 'CLAUDE_CONFIG_DIR');
   if (role === 'github' || role === 'git') names.push('GH_TOKEN', 'GITHUB_TOKEN', 'GH_HOST', 'GH_CONFIG_DIR', 'SSH_AUTH_SOCK');
   if (role === 'supervisor') names.push('EASY_SKILLS_HOME', 'GH_TOKEN', 'GITHUB_TOKEN', 'GH_CONFIG_DIR', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR',
@@ -75,6 +78,8 @@ export function childEnvironment(role: ProcessRole, source: NodeJS.ProcessEnv = 
   names.push(...(config.execution?.environment?.[role] || []));
   const env: NodeJS.ProcessEnv = {};
   for (const name of names) if (source[name] !== undefined) env[name] = source[name];
+  // Reused MSBuild nodes outlive a check, keep task worktree files locked and keep the environment they started with.
+  if (role === 'project') env.MSBUILDDISABLENODEREUSE = '1';
   // Explicit values come only from approved configuration, never a repository's environment file.
   Object.assign(env, extra);
   const owner = ownerPath(source);
