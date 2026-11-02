@@ -129,8 +129,12 @@ is explained and the same question is asked again. Scripted provider answers use
 exact ID (`codex` or `claude-code`) and fail clearly when invalid or unavailable.
 
 Stage banners show each model-setup position and explain its responsibility. DEFINE
-and PLAN are marked during the guided conversation; `easy-skills status` highlights
-the current execution stage. Color is used only in a supported interactive terminal
+and PLAN are marked during the guided conversation; `easy-skills status` follows
+the current execution stage live, redrawn in place every two seconds, until the task
+is ready or waits for the owner. `run` and `revise` continue into the same view after
+approval. Watching never owns the work: Ctrl+C or a closed window leaves the detached
+worker running. `easy-skills show ids` lists every task with the ID `status`, `watch`
+and `resume` accept; `status` without an ID shows all open tasks as one live table. Color is used only in a supported interactive terminal
 and can be disabled with `NO_COLOR`; redirected output remains readable without it.
 
 | Prompt ID | Meaning |

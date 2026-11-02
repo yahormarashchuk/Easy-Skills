@@ -1,0 +1,127 @@
+import type { Run, Status } from '../contracts.js';
+import type { Store } from '../persistence/store.js';
+import { stageBanner } from './presentation.js';
+
+interface Output {write(text: string): unknown; columns?: number; rows?: number}
+export interface Style {color: boolean; unicode: boolean}
+
+/** A followed run stops being watched here: it finished, or it waits for the owner. Waiting states resume by themselves. */
+const settled: Status[] = ['draft', 'ready', 'merged', 'abandoned', 'stopped', 'needs_decision', 'paused'];
+const attention: Status[] = ['needs_decision', 'paused'];
+const finished: Status[] = ['merged', 'abandoned'];
+const RECENT = 8;
+
+export const stageOf = (run: Run) => run.tasks.find(t => !t.integrated)?.cursor || run.finalPhase;
+/** The short reference that status, watch and resume accept. */
+export const reference = (run: Run) => run.plan.workflow?.issue ? '#' + run.plan.workflow.issue : run.plan.featureId;
+
+export function summary(run: Run, style: Style) {
+  return `${run.plan.workflow?.issue ? 'Task #' + run.plan.workflow.issue : run.plan.title}: ${run.status}\n` +
+    (run.status === 'ready' ? `Ready for review: ${run.finalPr?.url}\nChecks: passed at ${run.finalReviewHead}\nReview: passed. Final merge: manual.` : stageBanner(stageOf(run), 'current', style.color, style.unicode)) +
+    (run.reason ? '\n' + run.reason : '') + (run.pendingDecision ? '\nDecision: ' + run.pendingDecision.question : '');
+}
+
+export function ago(time: string, now = Date.now()) {
+  const seconds = Math.max(0, Math.round((now - Date.parse(time)) / 1000));
+  return seconds < 60 ? seconds + 's ago' : seconds < 3600 ? Math.floor(seconds / 60) + 'm ago' : seconds < 86400 ? Math.floor(seconds / 3600) + 'h ago' : Math.floor(seconds / 86400) + 'd ago';
+}
+
+/** Owner-readable activity; process bookkeeping is left out. */
+export function describe(type: string, data: Record<string, any>): string | undefined {
+  switch (type) {
+    case 'check.started': return `Check ${data.check}${data.baseline ? ' (baseline)' : ''} started`;
+    case 'check.finished': return `Check ${data.checkId} ${data.code === 0 ? 'passed' : 'failed (exit ' + data.code + ')'}`;
+    case 'setup.child.started': return `Setup ${data.command} started`;
+    case 'client.started': return `${data.stage || 'AI'} step started${data.task ? ' for ' + data.task : ''}`;
+    case 'client.exited': return 'AI step finished';
+    case 'run.started': return 'Run started';
+    case 'integration.created': return 'Task branch created';
+    case 'direct.built': return 'BUILD finished';
+    case 'feature.verified': return 'VERIFY passed';
+    case 'feature.reviewed': return 'REVIEW passed';
+    case 'feature.ready': return 'Pull request ready' + (data.pr?.url ? ': ' + data.pr.url : '');
+    case 'task.repair': case 'feature.repair': return `Repair attempt ${data.count}${data.reason ? ': ' + data.reason : ''}`;
+    case 'run.suspended': return 'Stopped: ' + (data.reason || data.status || 'see status');
+    case 'decision.requested': return 'Your decision is needed';
+    case 'setup.child.exited': case 'client.session': case 'control.applied': case 'control.requested': case 'draft.created': return undefined;
+    default: return type.replace(/[._]/g, ' ');
+  }
+}
+
+export function activity(store: Store, id: string, limit = RECENT): string[] {
+  const lines: string[] = [];
+  for (const event of store.events(id) as {time: string; type: string; data: string}[]) {
+    const text = describe(event.type, JSON.parse(event.data || '{}'));
+    if (text) lines.push(`${new Date(event.time).toLocaleTimeString()}  ${text}`);
+  }
+  return lines.slice(-limit);
+}
+
+/** Every task of the repository: those waiting for the owner first, then active, then finished. */
+export function taskTable(runs: Run[], now = Date.now()): string {
+  if (!runs.length) return 'No tasks in this repository. Use easy-skills run to create one.';
+  const rank = (run: Run) => attention.includes(run.status) ? 0 : finished.includes(run.status) ? 2 : 1;
+  const rows = [...runs].sort((a, b) => rank(a) - rank(b) || Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+    .map(run => [reference(run), run.id.slice(0, 8), stageOf(run), run.status, ago(run.updatedAt, now), run.plan.title]);
+  const header = ['ID', 'RUN', 'STAGE', 'STATUS', 'UPDATED', 'TASK'];
+  const widths = header.slice(0, -1).map((h, i) => Math.max(h.length, ...rows.map(r => r[i]!.length)));
+  return [header, ...rows].map(row => row.map((cell, i) => i < widths.length ? cell.padEnd(widths[i]!) : cell).join('  ')).join('\n');
+}
+
+/** Redraws a block in place, the way ActivityView does, so a terminal shows one current view instead of a scrolling log. */
+class Screen {
+  private drawn = 0;
+  constructor(private readonly out: Output) {}
+  draw(text: string) {
+    const width = Math.max(20, (this.out.columns || 100) - 1), height = Math.max(5, (this.out.rows || 40) - 1);
+    // Lines must never wrap or exceed the window, or moving the cursor up would not reach the top of the block.
+    const lines = text.split('\n').map(line => visible(line) <= width ? line : line.slice(0, width - 3) + '...').slice(-height);
+    this.out.write((this.drawn > 1 ? `\u001b[${this.drawn - 1}A` : '') + '\r' + lines.map(line => '\u001b[2K' + line).join('\n') + '\u001b[J');
+    this.drawn = lines.length;
+  }
+  end(text = '') {this.out.write('\n' + (text ? text + '\n' : '')); this.drawn = 0;}
+}
+const visible = (line: string) => line.replace(/\u001b\[[0-9;]*m/g, '').length;
+
+export interface WatchOptions {style: Style; out?: Output; intervalMs?: number; signal?: AbortSignal; now?: () => number}
+
+/**
+ * Follows one run until it finishes or waits for the owner. Ctrl+C only stops watching: the detached worker owns the run,
+ * so closing this terminal never stops it.
+ */
+export async function watchRun(store: Store, id: string, options: WatchOptions): Promise<Run> {
+  return follow(options, () => {
+    const run = store.get(id);
+    const view = summary(run, options.style) + '\n\nRecent activity:\n' + (activity(store, id).map(line => '  ' + line).join('\n') || '  (none yet)') +
+      `\n\nUpdated ${new Date(options.now?.() ?? Date.now()).toLocaleTimeString()}. Ctrl+C stops watching; the task keeps running.`;
+    return {view, done: settled.includes(run.status), result: run, hint: `Watch again: easy-skills status ${reference(run)}`};
+  });
+}
+
+/** Follows every task of the repository until Ctrl+C, or until none of them is still working. */
+export async function watchTasks(store: Store, root: string, options: WatchOptions): Promise<Run[]> {
+  return follow(options, () => {
+    const runs = store.list().filter(run => run.root === root && !finished.includes(run.status));
+    const view = taskTable(runs, options.now?.()) + '\n\nDetails of one task: easy-skills status ID. Ctrl+C stops watching; tasks keep running.';
+    return {view, done: runs.every(run => settled.includes(run.status)), result: runs, hint: 'Watch again: easy-skills status'};
+  });
+}
+
+async function follow<T>(options: WatchOptions, read: () => {view: string; done: boolean; result: T; hint: string}): Promise<T> {
+  const screen = new Screen(options.out || process.stdout), controller = new AbortController();
+  const stop = () => controller.abort();
+  options.signal?.addEventListener('abort', stop);
+  process.once('SIGINT', stop);
+  try {
+    for (;;) {
+      const state = read();
+      screen.draw(state.view);
+      if (state.done) {screen.end(); return state.result;}
+      if (controller.signal.aborted) {screen.end('Stopped watching. ' + state.hint); return state.result;}
+      await new Promise<void>(resolve => {
+        const timer = setTimeout(resolve, options.intervalMs ?? 2000);
+        controller.signal.addEventListener('abort', () => {clearTimeout(timer); resolve();}, {once: true});
+      });
+    }
+  } finally {process.removeListener('SIGINT', stop); options.signal?.removeEventListener('abort', stop);}
+}

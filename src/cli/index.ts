@@ -28,7 +28,8 @@ import { bootstrap } from './bootstrap.js';
 import { childEnvironment } from '../execution.js';
 import { Guided, resolveRun } from '../runner/guided.js';
 import { TerminalInteraction } from './interaction.js';
-import { stageBanner, useColor, useUnicode } from './presentation.js';
+import { useColor, useUnicode } from './presentation.js';
+import { summary as describeRun, taskTable, watchRun, watchTasks } from './monitor.js';
 
 const program = new Command().name('easy-skills').version(VERSION).description('Local engineering workflow runner (alpha)');
 program.option('--project <path>', 'Project directory', process.cwd());
@@ -45,11 +46,14 @@ async function guided<T>(opts: {answers?: string; nonInteractive?: boolean}, fn:
   const ui = new TerminalInteraction(opts);
   try {return await withStore(store => fn(new Guided(store, ui), store, ui));} finally {ui.close();}
 }
-function summary(run: import('../contracts.js').Run) {
-  const stage = run.tasks.find(t => !t.integrated)?.cursor || run.finalPhase;
-  return `${run.plan.workflow?.issue ? 'Task #' + run.plan.workflow.issue : run.plan.title}: ${run.status}\n` +
-    (run.status === 'ready' ? `Ready for review: ${run.finalPr?.url}\nChecks: passed at ${run.finalReviewHead}\nReview: passed. Final merge: manual.` : stageBanner(stage, 'current', useColor(process.stdout.isTTY), !!process.stdout.isTTY && useUnicode())) +
-    (run.reason ? '\n' + run.reason : '') + (run.pendingDecision ? '\nDecision: ' + run.pendingDecision.question : '');
+const style = () => ({color: useColor(process.stdout.isTTY), unicode: !!process.stdout.isTTY && useUnicode()});
+function summary(run: import('../contracts.js').Run) {return describeRun(run, style());}
+/** Live views need a terminal; scripts and redirected output get one snapshot. */
+const live = (opts: {once?: boolean; nonInteractive?: boolean} = {}) => !!process.stdout.isTTY && !opts.once && !opts.nonInteractive;
+/** Follows a started run in this terminal; the detached worker keeps it going when watching stops. */
+async function follow(id: string) {
+  process.stdout.write('Watching progress. Ctrl+C or closing this window stops watching only; the task keeps running.\n\n');
+  await withStore(store => watchRun(store, id, {style: style()}));
 }
 /** Identifies the installed CLI build, so a worker started by an older build is replaced rather than reused. */
 // During a reinstall the entry is briefly absent; that counts as a different build, never a worker crash.
@@ -120,9 +124,11 @@ program.command('run <task>').description('Discuss an Issue, local specification
     const profile = await wizard.profile(cwd()); await wizard.compatibility(cwd(), profile);
     await wizard.onboard(cwd(), profile);
     const plan = await wizard.proposal(cwd(), task, profile, undefined, opts.refine), run = await wizard.approve(cwd(), plan);
-    if (opts.foreground) ui.say(summary(await new Engine(store).run(run.id)));
-    else {await start(store, run.id); ui.say('Autonomous development started. Use easy-skills status to follow progress and easy-skills resume after an interruption.');}
-  }));
+    if (opts.foreground) {ui.say(summary(await new Engine(store).run(run.id))); return;}
+    await start(store, run.id);
+    ui.say(`Autonomous development started as ${run.plan.featureId}. Use easy-skills status ${run.plan.featureId} to follow progress and easy-skills resume after an interruption.`);
+    return run.id;
+  }).then(id => id && live(opts) ? follow(id) : undefined));
 program.command('revise <task> <feedback>').description('Review a revised plan and update the same task branch and PR')
   .option('--answers <json>').option('--non-interactive').option('--foreground')
   .action(async (task, feedback, opts) => guided(opts, async (wizard, store, ui) => {
@@ -130,9 +136,10 @@ program.command('revise <task> <feedback>').description('Review a revised plan a
     if (previous.status !== 'ready' || !previous.plan.workflow) throw new Error('Feedback requires a ready direct task; use resume for interrupted work');
     const profile = await wizard.profile(cwd()); await wizard.compatibility(cwd(), profile);
     const plan = await wizard.proposal(cwd(), feedback, profile, previous), run = await wizard.approve(cwd(), plan, previous);
-    if (opts.foreground) ui.say(summary(await new Engine(store).run(run.id)));
-    else {await start(store, run.id); ui.say('Applying approved feedback on the existing branch and PR. Use easy-skills status for progress.');}
-  }));
+    if (opts.foreground) {ui.say(summary(await new Engine(store).run(run.id))); return;}
+    await start(store, run.id); ui.say('Applying approved feedback on the existing branch and PR. Use easy-skills status for progress.');
+    return run.id;
+  }).then(id => id && live(opts) ? follow(id) : undefined));
 program.command('project-config').requiredOption('--file <yaml>', 'Reviewed replacement project v2 configuration').option('--apply-hash <hash>', 'Apply the reviewed configuration with a backup')
   .action(async opts => output(await updateProject(cwd(), read(opts.file), opts.applyHash)));
 program.command('rules-hash').action(() => output({rulesHash: rulesHash(cwd())}));
@@ -204,13 +211,27 @@ program.command('resume [id]').description('Resume the latest task, Issue number
   }));
 program.command('pause <id>').action(async id => withStore(store => {new Engine(store).requestControl(id, 'pause'); output({runId: id, requested: 'pause', at: 'next safe checkpoint'});}));
 program.command('stop <id>').action(async id => withStore(store => {new Engine(store).requestControl(id, 'stop'); output({runId: id, requested: 'stop', at: 'next safe checkpoint'});}));
-program.command('status [id]').option('--json', 'Advanced: full persisted diagnostics').action(async (id, opts) => withStore(async store => {
+const watchCommand = async (id: string | undefined, opts: {json?: boolean; once?: boolean}) => withStore(async store => {
   // Explicit UUID retains the original machine-readable advanced interface.
   if (id && /^[a-f0-9-]{36}$/.test(id)) {output({...store.get(id), notifications: store.notificationSummary(id)}); return;}
   const root = (await new Git(cwd()).identity()).root;
-  if (opts.json) output(id ? resolveRun(store, root, id) : store.list().filter(r => r.root === root));
-  else process.stdout.write(summary(resolveRun(store, root, id)) + '\n');
-}));
+  if (opts.json) {output(id ? resolveRun(store, root, id) : store.list().filter(r => r.root === root)); return;}
+  if (!live(opts)) {process.stdout.write(summary(resolveRun(store, root, id)) + '\n'); return;}
+  // Several unfinished tasks are shown together; otherwise the one task in detail.
+  const open = store.list().filter(r => r.root === root && !['merged', 'abandoned'].includes(r.status));
+  if (!id && open.length > 1) await watchTasks(store, root, {style: style()});
+  else await watchRun(store, resolveRun(store, root, id).id, {style: style()});
+});
+program.command('status [id]').description('Follow a task live (ID from easy-skills show ids); several unfinished tasks are shown together')
+  .option('--once', 'Print one snapshot instead of following').option('--json', 'Advanced: full persisted diagnostics').action(watchCommand);
+program.command('watch [id]').description('Follow a task live again, for example after closing the terminal; Ctrl+C stops watching only')
+  .action(id => watchCommand(id, {}));
+program.command('show <what>').description('show ids: list every task of this repository with the ID that status, watch and resume accept')
+  .action(async what => {
+    if (what !== 'ids') throw new Error('Unknown item: ' + what + '. Use easy-skills show ids');
+    const root = (await new Git(cwd()).identity()).root;
+    await withStore(store => process.stdout.write(taskTable(store.list().filter(r => r.root === root)) + '\n'));
+  });
 program.command('events <id>').action(async id => withStore(store => output(store.events(id))));
 program.command('abandon <id>').description('Retain history and resources; allow a separately approved replacement').action(async id => withStore(store => new Engine(store).abandon(id).then(output)));
 program.command('baseline <id>').requiredOption('--recapture <commit>', 'Exact selected base before implementation').option('--apply-hash <hash>', 'Apply the reviewed recapture').action(async (id, opts) => withStore(async store => output(await new Engine(store).recaptureBaseline(id, opts.recapture, opts.applyHash))));
