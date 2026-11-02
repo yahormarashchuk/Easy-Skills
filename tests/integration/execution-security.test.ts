@@ -132,5 +132,6 @@ test('project commands keep standard Windows locations and never reuse MSBuild n
   assert.equal(project.ProgramData, 'C:\ProgramData');
   assert.equal(project.SECRET_TOKEN, undefined);
   assert.equal(project.MSBUILDDISABLENODEREUSE, '1');
+  assert.equal(project.PYTHONDONTWRITEBYTECODE, '1');
   assert.equal(childEnvironment('git', source).MSBUILDDISABLENODEREUSE, undefined);
 });

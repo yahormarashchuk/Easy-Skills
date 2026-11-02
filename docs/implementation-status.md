@@ -54,7 +54,9 @@ built-in Windows PowerShell when PowerShell 7 is not installed; the check's own 
 still decides whether it passes. Children keep standard Windows location variables such
 as `ProgramFiles(x86)` and `ProgramData` (NuGet restore fails without them), and project
 commands set `MSBUILDDISABLENODEREUSE=1`, so MSBuild nodes never outlive a check, lock
-task worktree files or keep an earlier environment.
+task worktree files or keep an earlier environment. They also set
+`PYTHONDONTWRITEBYTECODE=1`: a Python check would otherwise leave `__pycache__` files that
+a repository may not ignore, and the task scope guard would block them as unapproved changes.
 
 Cleanup rejects unknown ignored files to avoid deleting private data hidden by
 .gitignore. The optional `--setup-outputs` proposal includes only unchanged ignored

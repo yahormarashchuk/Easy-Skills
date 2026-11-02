@@ -79,7 +79,8 @@ export function childEnvironment(role: ProcessRole, source: NodeJS.ProcessEnv = 
   const env: NodeJS.ProcessEnv = {};
   for (const name of names) if (source[name] !== undefined) env[name] = source[name];
   // Reused MSBuild nodes outlive a check, keep task worktree files locked and keep the environment they started with.
-  if (role === 'project') env.MSBUILDDISABLENODEREUSE = '1';
+  // Python bytecode caches are untracked files in repositories that do not ignore them and would exceed the task scope.
+  if (role === 'project') Object.assign(env, {MSBUILDDISABLENODEREUSE: '1', PYTHONDONTWRITEBYTECODE: '1'});
   // Explicit values come only from approved configuration, never a repository's environment file.
   Object.assign(env, extra);
   const owner = ownerPath(source);
