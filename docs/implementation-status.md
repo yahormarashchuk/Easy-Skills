@@ -43,6 +43,19 @@ metacharacters are rejected rather than executed. Use a native executable, or
 `node path/to/script.js`, when a check needs literal quotes, percent signs or shell
 operators in its arguments. No arbitrary Issue text becomes a shell command.
 
+Approved project commands (and MCP servers) resolve after the trusted directories
+against the PATH of the owner who started Easy Skills, which the detached supervisor
+carries as `EASY_SKILLS_OWNER_PATH`. This finds toolchains such as
+`C:\Program Files\dotnet` or a Python installation. Relative entries, Windows app
+execution aliases (`Microsoft\WindowsApps`) and directories inside the working tree are
+never used. Runner tools (Git, GitHub CLI, model clients) stay on trusted directories.
+On Windows, a check that names `pwsh` (PowerShell 7, common in CI files) runs with the
+built-in Windows PowerShell when PowerShell 7 is not installed; the check's own result
+still decides whether it passes. Children keep standard Windows location variables such
+as `ProgramFiles(x86)` and `ProgramData` (NuGet restore fails without them), and project
+commands set `MSBUILDDISABLENODEREUSE=1`, so MSBuild nodes never outlive a check, lock
+task worktree files or keep an earlier environment.
+
 Cleanup rejects unknown ignored files to avoid deleting private data hidden by
 .gitignore. The optional `--setup-outputs` proposal includes only unchanged ignored
 files inventoried as outputs of the approved setup, under its exact apply hash.
