@@ -17,6 +17,25 @@ test('intermediate Codex JSON is not a final stage result; corrupt events fail e
   assert.equal(decode('claude-code', JSON.stringify({type: 'result', subtype: 'success', result: JSON.stringify(result)})).result, undefined);
 });
 
+test('Claude synthetic API quota message preserves the retry time and does not become a model mismatch', async () => {
+  const reset = Math.floor(Date.now() / 1000) + 3600;
+  const client = new CliClient(async (_command, options) => {
+    options.onLine?.(JSON.stringify({type: 'system', subtype: 'init', session_id: 'saved', model: 'fixture-exact'}));
+    options.onLine?.(JSON.stringify({type: 'assistant', message: {model: '<synthetic>', content: [{type: 'text', text: 'Usage limit reached'}]},
+      is_api_error_message: true, api_error_status: 429, api_error: 'usage_limit_reached',
+      api_error_params: {rate_limit_info: {resetsAt: reset}}}));
+    return {code: 1, stdout: '', stderr: '', timedOut: false, truncated: false};
+  });
+  await assert.rejects(client.run({provider: 'claude-code', model: 'fixture-exact'}, 'fixture', {cwd: '.', session: 'saved'}),
+    (error: any) => error.kind === 'quota' && error.retryAt === new Date(reset * 1000).toISOString());
+  const wrongModel = new CliClient(async (_command, options) => {
+    options.onLine?.(JSON.stringify({type: 'assistant', message: {model: 'other-model'}}));
+    return {code: 0, stdout: '', stderr: '', timedOut: false, truncated: false};
+  });
+  await assert.rejects(wrongModel.run({provider: 'claude-code', model: 'fixture-exact'}, 'fixture', {cwd: '.'}),
+    (error: any) => error.kind === 'model');
+});
+
 for (const provider of ['codex', 'claude-code'] as const) test(`${provider} launch and resume use schema and authoritative final channel`, async () => {
   const commands: string[][] = [];
   const client = new CliClient(async (command, options) => {
