@@ -55,15 +55,15 @@ export function invocation(assignment: Assignment, session?: string, mode: 'read
 export interface ClientEvent {session?: string; result?: StageResult; invalid?: string; complete?: boolean; error?: string; kind?: ErrorKind; fatal?: boolean; models?: string[]; retryAt?: string}
 function structuredError(event: Record<string, any>): Pick<ClientEvent, 'error' | 'kind' | 'retryAt'> {
   const detail = event.error || event;
-  const code = detail.code || detail.type || event.error_code;
-  const status = detail.status || detail.status_code;
+  const code = detail.code || event.api_error || event.error_code || detail.type;
+  const status = detail.status || detail.status_code || event.api_error_status;
   const kind: ErrorKind | undefined = status === 429 || ['rate_limit_exceeded', 'insufficient_quota', 'usage_limit_reached'].includes(code) ? 'quota'
     : status === 401 || ['authentication_error', 'unauthorized'].includes(code) ? 'auth'
     : [500, 502, 503, 504].includes(status) || ['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND'].includes(code) ? 'network' : undefined;
-  return {error: detail.message || event.message || 'Client request failed', kind, retryAt: resetTime(event)};
+  return {error: detail.message || event.message?.content?.find?.((item: {type: string; text?: string}) => item.type === 'text')?.text || event.message || 'Client request failed', kind, retryAt: resetTime(event)};
 }
 function resetTime(event: Record<string, any>): string | undefined {
-  const error = event.error || event.rate_limit_info || event;
+  const error = event.api_error_params?.rate_limit_info || event.error || event.rate_limit_info || event;
   const value = error.retry_at ?? error.reset_at ?? error.resets_at ?? error.resetsAt;
   const time = typeof value === 'number' ? value * (value < 1e12 ? 1000 : 1) : typeof value === 'string' ? Date.parse(value) : NaN;
   return Number.isFinite(time) && time > Date.now() && time < Date.now() + 365 * 24 * 60 * 60_000 ? new Date(time).toISOString() : undefined;
@@ -79,6 +79,7 @@ export function decode(provider: Assignment['provider'], line: string): ClientEv
   } else {
     if (event.type === 'rate_limit_event') return {retryAt: resetTime(event)};
     if (event.type === 'system' && event.subtype === 'init') return {session: event.session_id, models: event.model ? [event.model] : undefined};
+    if (event.type === 'assistant' && event.is_api_error_message) return {...structuredError(event), fatal: true};
     if (event.type === 'assistant' && event.message?.model) return {models: [event.message.model]};
     if (event.type === 'result') {
       if (event.is_error || event.subtype !== 'success') return {...structuredError(event), error: typeof event.result === 'string' ? event.result : JSON.stringify(event.errors || event.subtype), fatal: true};
