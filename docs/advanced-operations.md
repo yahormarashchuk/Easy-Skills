@@ -88,7 +88,10 @@ prepares each worktree and captures a baseline before BUILD. Existing failures
 or unavailable checks stop implementation for a decision; they never count as passing
 feature evidence.
 
-The detached worker survives terminal closure. Each task gets a PR into the feature
+The detached worker survives terminal closure. It records the installed CLI build it
+started from; between executions it exits once a different build is installed, and
+`resume`/`start` wait for that instead of attaching, so an upgrade never keeps running
+outdated code. Each task gets a PR into the feature
 branch. Its Issue closes after implementation, checks/review and PR publication;
 dependencies remain pending until the PR is actually merged. Features can run in
 parallel, with one task executor per feature. Queued/accepted merge requests remain
