@@ -52,7 +52,8 @@ function summary(run: import('../contracts.js').Run) {
     (run.reason ? '\n' + run.reason : '') + (run.pendingDecision ? '\nDecision: ' + run.pendingDecision.question : '');
 }
 /** Identifies the installed CLI build, so a worker started by an older build is replaced rather than reused. */
-function buildStamp() {const file = statSync(fileURLToPath(import.meta.url)); return `${file.size}:${file.mtimeMs}`;}
+// During a reinstall the entry is briefly absent; that counts as a different build, never a worker crash.
+function buildStamp() {try {const file = statSync(fileURLToPath(import.meta.url)); return `${file.size}:${file.mtimeMs}`;} catch {return 'unavailable';}}
 async function start(store: Store, id: string) {
   if (store.locked('worker:' + id)) {
     const recorded = store.operation<{build?: string}>(`${id}:worker-build`)?.build;
