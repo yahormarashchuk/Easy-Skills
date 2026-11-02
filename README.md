@@ -106,13 +106,19 @@ You do not need to prepare YAML or copy approval hashes for the normal terminal 
 
 ### 4️⃣ Follow progress and review the PR
 
+After approval, `run` keeps showing live progress: stage, checks and recent activity.
+Ctrl+C or closing the window stops watching only; the detached worker implements,
+checks, reviews, and publishes the approved work either way. Watch again later:
+
 ```powershell
-easy-skills status
+easy-skills show ids          # every task of this repository and its ID
+easy-skills status task-1a2b  # follow one task live (or: easy-skills watch task-1a2b)
+easy-skills status            # follow the open task, or all of them as a live table
 ```
 
-The detached worker implements, checks, reviews, and publishes the approved work.
 The result is a reviewed PR awaiting your acceptance. **Final merge is manual by
-default.** Closing the terminal does not stop the detached worker.
+default.** `easy-skills status --once` prints a single snapshot; redirected output and
+scripts always get one snapshot.
 
 > [!TIP]
 > If PowerShell blocks an npm `.ps1` wrapper, use `easy-skills.cmd` or `npm.cmd` with
@@ -226,7 +232,8 @@ helper or extra allow rules. Explicitly choose another configuration when that h
 
 | Situation | Command | Result |
 | --- | --- | --- |
-| Check the latest task | `easy-skills status` | Readable progress, PR, or genuine blocker. |
+| Find a task's ID | `easy-skills show ids` | Every task with its ID, stage, status and last update. |
+| Follow tasks | `easy-skills status [ID]` | Live progress, PR, or genuine blocker; several open tasks show as one live table. |
 | Resume after interruption | `easy-skills resume` | Continue the approved plan and recorded sessions. |
 | Revise an Issue's delivered work | `easy-skills revise 909 "Also normalize repeated spaces"` | Review a revised plan and update the same branch and PR. |
 | Revise a text or document task | `easy-skills revise latest "Describe the correction"` | Select the latest active task without an internal ID. |
@@ -248,7 +255,9 @@ actively merging PRs require reconciliation before further changes.
 | --- | --- |
 | `easy-skills init` | Learn a project and approve reusable rules. |
 | `easy-skills run <task>` | Discuss requirements and start approved autonomous work. |
-| `easy-skills status [task]` | Inspect the latest task or a selected Issue. |
+| `easy-skills show ids` | List every task of this repository with the ID the other commands accept. |
+| `easy-skills status [task]` | Follow a task live (`--once` for a snapshot); with several open tasks, a live table of all. |
+| `easy-skills watch [task]` | Follow again after closing the terminal; Ctrl+C stops watching, never the task. |
 | `easy-skills resume [task]` | Recover an approved task safely. |
 | `easy-skills revise <task> "feedback"` | Update an existing PR; use `latest`, an Issue number, or a displayed task title. |
 | `easy-skills rules ["change"]` | Review or update the project rules. |
