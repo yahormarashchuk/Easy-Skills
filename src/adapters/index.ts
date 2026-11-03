@@ -53,6 +53,7 @@ export function invocation(assignment: Assignment, session?: string, mode: 'read
   return {command: 'claude', args};
 }
 const QUOTA_MESSAGE = /out of credits|credit balance is too low|spend(?:ing)? limit|usage limit|rate limit|quota (?:exceeded|exhausted)|hit your (?:org'?s )?(?:monthly |session |usage )?limit/i;
+const CAPACITY_MESSAGE = /at capacity|over ?capacity|overloaded|temporarily unavailable|service unavailable|try again (?:later|in a few)/i;
 export interface ClientEvent {session?: string; result?: StageResult; invalid?: string; complete?: boolean; error?: string; kind?: ErrorKind; fatal?: boolean; models?: string[]; retryAt?: string}
 function structuredError(event: Record<string, any>): Pick<ClientEvent, 'error' | 'kind' | 'retryAt'> {
   const detail = event.error || event;
@@ -64,7 +65,9 @@ function structuredError(event: Record<string, any>): Pick<ClientEvent, 'error' 
     : [500, 502, 503, 504].includes(status) || ['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND'].includes(code) ? 'network'
     // Some account limits arrive as a provider error event with prose only. Matching it here, never on stage output or
     // check logs, lets the run wait and retry instead of asking the owner to decide.
-    : typeof error === 'string' && QUOTA_MESSAGE.test(error) ? 'quota' : undefined;
+    : typeof error === 'string' && QUOTA_MESSAGE.test(error) ? 'quota'
+    // A provider that is busy says so in prose; waiting and retrying is the right answer, not an owner decision.
+    : typeof error === 'string' && CAPACITY_MESSAGE.test(error) ? 'network' : undefined;
   return {error, kind, retryAt: resetTime(event)};
 }
 function resetTime(event: Record<string, any>): string | undefined {

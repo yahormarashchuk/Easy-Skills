@@ -81,6 +81,9 @@ test('Codex accepts a completed retried turn while terminal/protocol failures re
   assert.equal(decode('codex', JSON.stringify({type: 'turn.failed', error: {message: 'Your workspace is out of credits. Ask your workspace owner to refill in order to continue.'}})).kind, 'quota');
   assert.equal(decode('codex', JSON.stringify({type: 'error', message: 'Your workspace is out of credits.'})).kind, 'quota');
   assert.equal(decode('codex', JSON.stringify({type: 'turn.failed', error: {message: 'Sandbox denied the command'}})).kind, undefined);
+  // A busy provider is a temporary wait, not a decision for the owner.
+  assert.equal(decode('codex', JSON.stringify({type: 'turn.failed', error: {message: 'Selected model is at capacity. Please try a different model.'}})).kind, 'network');
+  assert.equal(decode('codex', JSON.stringify({type: 'error', message: 'The service is temporarily unavailable'})).kind, 'network');
   const args = invocation({provider: 'claude-code', model: 'fixture'}, undefined, 'read', undefined,
     {capabilities: {diagnostics: ['"C:/Program Files (x86)/node.exe" "check \u2603.mjs"'], browserTools: []}}).args;
   assert.ok(args.includes('Bash("C:/Program Files (x86)/node.exe" "check \u2603.mjs")'));
