@@ -238,6 +238,7 @@ helper or extra allow rules. Explicitly choose another configuration when that h
 | Revise an Issue's delivered work | `easy-skills revise 909 "Also normalize repeated spaces"` | Review a revised plan and update the same branch and PR. |
 | Revise a text or document task | `easy-skills revise latest "Describe the correction"` | Select the latest active task without an internal ID. |
 | Update project rules | `easy-skills rules "Require approval before new dependencies"` | Investigate conflicts and approve a new rules version. |
+| Give a stopped task checks its plan lacks | `easy-skills adopt-config latest` | After approving the new project configuration and rules, continue the same task, branch and code with the added checks. |
 
 Feedback retains the previous specification and implementation context. A revised
 approval invalidates old readiness, preserves approval history, and repeats checks
@@ -260,6 +261,7 @@ actively merging PRs require reconciliation before further changes.
 | `easy-skills watch [task]` | Follow again after closing the terminal; Ctrl+C stops watching, never the task. |
 | `easy-skills resume [task]` | Recover an approved task safely. |
 | `easy-skills revise <task> "feedback"` | Update an existing PR; use `latest`, an Issue number, or a displayed task title. |
+| `easy-skills adopt-config <task>` | Continue a task stopped for a decision with the approved project configuration (added checks). |
 | `easy-skills rules ["change"]` | Review or update the project rules. |
 | `easy-skills config` | Select or edit exact stage model profiles. |
 | `easy-skills install-skills --client codex --interactive` | Install official packaged skills with reviewed backups. |

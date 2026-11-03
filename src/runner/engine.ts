@@ -14,7 +14,9 @@ import { recordFailure, confirmedProgress } from './failures.js';
 import { requireCompatibility } from './compatibility.js';
 import { CheckFailure, failureBundle } from './check-failure.js';
 import { requireAgreement } from './onboarding.js';
-import { assertProtected } from './protected-inputs.js';
+import { assertProtected, protectedManifest } from './protected-inputs.js';
+import { knowledgeSnapshot } from './discovery.js';
+import { loadProject } from '../cli/project.js';
 import { CodeFailure, startRepair, pendingRepair, completeRepair, repairKey, type Repair } from './repairs.js';
 import { ownerAlive, processIdentity } from '../process-identity.js';
 import { ignoredOutputs } from './setup-outputs.js';
@@ -104,6 +106,63 @@ export class Engine {
         this.approve(id, expectedHash);
       });
       return this.store.get(id);
+    } finally {this.store.release('run:' + id, owner);}
+  }
+  /**
+   * A task stopped for a decision can need checks that its approved plan lacks; neither an answer nor feedback may add them.
+   * After the owner approves a new project configuration, this binds the task to it, keeping its branch, commits and any
+   * pending repair. Approved checks can be added but never removed or changed.
+   */
+  async adoptConfiguration(id: string, approvedHash?: string) {
+    const owner = this.store.acquire('run:' + id), run = this.store.get(id);
+    try {
+      if (!['needs_decision', 'paused'].includes(run.status) || ownerAlive(run.childPid, run.childIdentity))
+        throw new Error('Only a task stopped for a decision or paused, with no live client, can adopt a new project configuration');
+      if (!run.plan.workflow || !run.worktree) throw new Error('Only a direct task with an integration worktree can adopt a new project configuration');
+      const project = loadProject(run.root), previous = run.plan.project;
+      for (const field of ['name', 'repository', 'mainBranch', 'remote', 'githubTransport'] as const)
+        if (project[field] !== previous[field]) throw new Error('A new configuration cannot change task identity: ' + field);
+      const removed = previous.checks.filter(check => !project.checks.some(c => hash(c) === hash(check)));
+      if (removed.length) throw new Error('A new configuration cannot remove or change approved checks: ' + removed.map(c => c.id).join(', '));
+      const plan = Plan.parse({...run.plan, project, protectedInputs: protectedManifest(run.root, project), rulesHash: rulesHash(run.root),
+        rulesAgreement: requireAgreement(run.root), workflow: {...run.plan.workflow, context: knowledgeSnapshot(run.root)}});
+      if (hash(plan) === run.planHash) throw new Error('The task already uses the approved project configuration');
+      const proposal = {runId: id, previousPlanHash: run.planHash, planHash: hash(plan), rulesAgreement: plan.rulesAgreement,
+        addedChecks: project.checks.filter(check => !previous.checks.some(c => hash(c) === hash(check))),
+        setupChanged: hash(project.setup || []) !== hash(previous.setup || []), phase: run.finalPhase};
+      const digest = hash(proposal);
+      if (!approvedHash) return {...proposal, hash: digest};
+      if (approvedHash !== digest) throw new Error('The configuration proposal changed; review it again');
+      const changedInputs = Object.keys({...run.plan.protectedInputs, ...plan.protectedInputs})
+        .filter(path => run.plan.protectedInputs?.[path] !== plan.protectedInputs?.[path]);
+      this.store.transaction(() => {
+        this.store.recordOperation(`${id}:approval:${run.planHash}`, id, 'approval.history', {plan: run.plan, planHash: run.planHash, approvedHash: run.approvedHash});
+        // Setup already passed with the same commands; only the adopted configuration files and inputs newly named by the
+        // added checks differ, so it stays valid and a pending repair keeps its uncommitted work.
+        if (!proposal.setupChanged && changedInputs.every(path => path.startsWith('.easy-skills/') || !(path in (run.plan.protectedInputs || {})))) {
+          const before = hash({commands: previous.setup || [], inputs: run.plan.protectedInputs});
+          for (const cwd of [run.worktree!, ...run.tasks.map(t => t.worktree).filter((p): p is string => !!p)]) {
+            const key = `${id}:setup:${hash(cwd)}`, setup = this.store.operation<{fingerprint: string; status: string}>(key);
+            if (setup?.status === 'passed' && setup.fingerprint === before)
+              this.store.recordOperation(key, id, 'setup.adopted', {...setup, fingerprint: hash({commands: project.setup || [], inputs: plan.protectedInputs})});
+          }
+        }
+        // The owner approved a new plan: completed repairs no longer count against its limit.
+        const repairs = this.store.operation<Repair[]>(repairKey(run, 'feature')) || [];
+        if (repairs.length) {
+          this.store.recordOperation(`${repairKey(run, 'feature')}:superseded:${run.planHash}`, id, 'repair.superseded', repairs);
+          this.store.recordOperation(repairKey(run, 'feature'), id, 'repair.adopted', repairs.filter(r => r.state === 'pending').map(r =>
+            ({...r, reason: r.reason + '\nThe owner approved a revised project configuration adding checks: ' + proposal.addedChecks.map(c => c.id).join(', ') + '. The runner records their results.'})));
+        }
+        run.plan = plan; run.planHash = proposal.planHash; run.approvedHash = proposal.planHash;
+        run.pendingDecision = undefined; run.failures = {fingerprint: '', head: '', count: 0};
+        run.finalEvidence = []; run.finalReviewHead = undefined;
+        if (run.finalPhase !== 'REPAIR') run.finalPhase = 'SYNC';
+        run.status = 'approved';
+        this.store.save(run, 'plan.configuration.adopted', {previous: proposal.previousPlanHash, planHash: proposal.planHash, added: proposal.addedChecks.map(c => c.id)});
+        this.store.recordOperation(`${id}:resume-request`, id, 'configuration.resume', {resume: true});
+      });
+      return {...proposal, hash: digest, status: run.status};
     } finally {this.store.release('run:' + id, owner);}
   }
   requestControl(id: string, action: 'pause' | 'stop') {

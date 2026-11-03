@@ -152,6 +152,7 @@ and can be disabled with `NO_COLOR`; redirected output remains readable without 
 | `task:specification` | Continue planning with displayed requirements |
 | `task:approve` | Approve exact displayed execution/revision proposal |
 | `install:approve` | Install displayed packaged skills with backups |
+| `config:adopt` | Continue a stopped task with the displayed added checks |
 
 In an interactive terminal each interview answer is a single answer however many lines
 it has: pasted text (Markdown, lists, blank lines) is collected until the input has
@@ -162,6 +163,21 @@ the same question again.
 Question IDs are model-derived. Fully scripted operation needs answers to the actual
 questions. Declining execution leaves local interview/planning records but creates
 no branch, Issue or PR.
+
+## Adding checks to a stopped task
+
+A decision answer clarifies the approved scope and `revise` updates a delivered PR;
+neither can change the checks a task runs. When VERIFY needs evidence from a check the
+plan lacks, add it to `.easy-skills/project.yaml` (`project-config`), renew the rules
+agreement (`agree-rules`), then run `easy-skills adopt-config <task>`. It shows the
+added checks and, once approved, continues the same task, branch and commits from its
+current stage, keeping a pending repair and its uncommitted work. Approved checks can
+be added, never removed or changed; the repository identity cannot change. The task
+must be stopped for a decision or paused, with no live client. Completed repairs stop
+counting against the repair limit because the owner approved a new plan; the previous
+plan and repair history are kept. A check that needs an environment variable receives
+it only when `execution.environment.project` in `settings.json` names it and the
+variable is set where the task is started or resumed.
 
 ## Migration and limits
 

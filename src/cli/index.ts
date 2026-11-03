@@ -140,6 +140,22 @@ program.command('revise <task> <feedback>').description('Review a revised plan a
     await start(store, run.id); ui.say('Applying approved feedback on the existing branch and PR. Use easy-skills status for progress.');
     return run.id;
   }).then(id => id && live(opts) ? follow(id) : undefined));
+program.command('adopt-config <task>').description('Apply the approved project configuration (for example new checks) to a task stopped for a decision, keeping its branch and code')
+  .option('--apply-hash <hash>', 'Apply the reviewed proposal without a prompt').option('--answers <json>').option('--non-interactive')
+  .action(async (task, opts) => guided(opts, async (_wizard, store, ui) => {
+    const engine = new Engine(store), id = resolveRun(store, cwd(), task).id;
+    const proposal = await engine.adoptConfiguration(id, opts.applyHash);
+    if (!opts.applyHash) {
+      ui.say(`Task ${store.get(id).plan.featureId} keeps its branch, commits and current stage (${proposal.phase}) and runs these added checks from now on:\n` +
+        proposal.addedChecks.map(c => `- ${c.id}: ${[c.command, ...c.args].join(' ')}`).join('\n') +
+        `\nSetup commands ${proposal.setupChanged ? 'changed and run again' : 'unchanged'}. Rules revision: ${proposal.rulesAgreement?.version}. Completed repairs no longer count against the repair limit.`);
+      if (!await ui.confirm('config:adopt', 'Continue this task with the approved project configuration?', proposal.hash)) throw new Error('The configuration was not adopted; the task is unchanged');
+      await engine.adoptConfiguration(id, proposal.hash);
+    }
+    await start(store, id);
+    ui.say(`Configuration adopted. Use easy-skills status ${store.get(id).plan.featureId} to follow progress.`);
+    return id;
+  }).then(id => id && live(opts) ? follow(id) : undefined));
 program.command('project-config').requiredOption('--file <yaml>', 'Reviewed replacement project v2 configuration').option('--apply-hash <hash>', 'Apply the reviewed configuration with a backup')
   .action(async opts => output(await updateProject(cwd(), read(opts.file), opts.applyHash)));
 program.command('rules-hash').action(() => output({rulesHash: rulesHash(cwd())}));

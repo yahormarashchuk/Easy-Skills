@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { fixture } from '../helpers.js';
 import { Guided, resolveRun, type Interaction, type ModelProfile } from '../../src/runner/guided.js';
 import { discover, knowledgeSnapshot } from '../../src/runner/discovery.js';
-import { requireAgreement } from '../../src/runner/onboarding.js';
+import { agreementProposal, applyAgreement, requireAgreement } from '../../src/runner/onboarding.js';
+import { stringify } from 'yaml';
 import { Plan } from '../../src/contracts.js';
 import { Engine } from '../../src/runner/engine.js';
 import { ClientError, type Client } from '../../src/adapters/index.js';
@@ -539,5 +540,48 @@ test('lost direct PR response reconciles the same PR and prevents a second execu
     const ready = await f.engine.run(run.id); assert.equal(ready.status, 'ready', ready.reason || '');
     assert.equal(f.github.prs.size, 1); assert.equal(f.github.issues.size, 1);
     assert.equal(f.calls.filter(c => c.startsWith('exact-BUILD:')).length, 1);
+  } finally {await f.dispose();}
+});
+
+test('a task stopped for a decision adopts approved added checks and keeps its branch, code and pending repair', async () => {
+  const f = await setup();
+  try {
+    const plan = await f.wizard.proposal(f.root, '909', f.profile), run = await f.wizard.approve(f.root, plan);
+    let verifies = 0, builds = 0;
+    const engine = new Engine(f.store, {testRemote: f.remote, github: f.github, client: {...f.client, async run(a, p, o) {
+      if (a.model === 'exact-VERIFY' && ++verifies === 1) {o.onSession?.(o.session || 'verify'); return {outcome: 'failed', summary: 'No check covers the added behavior', findings: ['Missing evidence']};}
+      if (a.model === 'exact-BUILD' && ++builds === 2) {
+        o.onSession?.(o.session || 'build'); writeFileSync(join(o.cwd, 'one.txt'), 'repair in progress\n');
+        return {outcome: 'blocked', summary: 'Only a check the plan lacks can supply this evidence', question: 'Approve a check for the added behavior?', findings: []};
+      }
+      return f.client.run(a, p, o);
+    }}});
+    const stopped = await engine.run(run.id);
+    assert.equal(stopped.status, 'needs_decision', stopped.reason || ''); assert.ok(stopped.pendingDecision); assert.equal(stopped.finalPhase, 'REPAIR');
+    await assert.rejects(engine.adoptConfiguration(run.id), /already uses/);
+
+    const projectFile = join(f.root, '.easy-skills/project.yaml'), agreed = () => {
+      const interview = JSON.parse(readFileSync(join(f.root, '.easy-skills/decisions/onboarding.json'), 'utf8'));
+      applyAgreement(f.root, interview, agreementProposal(f.root, interview).hash);
+    };
+    writeFileSync(projectFile, stringify({...stopped.plan.project, checks: stopped.plan.project.checks.map(c => ({...c, args: [...c.args, '--weaker']}))}));
+    await assert.rejects(engine.adoptConfiguration(run.id), /cannot remove or change approved checks: acceptance/);
+    const added = {id: 'added', command: process.execPath, args: ['-e', 'process.exit(0)'], timeoutMs: 300_000};
+    writeFileSync(projectFile, stringify({...stopped.plan.project, checks: [...stopped.plan.project.checks, added]})); agreed();
+
+    const proposal = await engine.adoptConfiguration(run.id);
+    assert.deepEqual(proposal.addedChecks.map(c => c.id), ['added']); assert.equal(proposal.phase, 'REPAIR');
+    await assert.rejects(engine.adoptConfiguration(run.id, 'stale'), /proposal changed/);
+    assert.equal(f.store.get(run.id).status, 'needs_decision');
+    assert.equal((await engine.adoptConfiguration(run.id, proposal.hash)).status, 'approved');
+    const adopted = f.store.get(run.id);
+    assert.equal(adopted.pendingDecision, undefined); assert.equal(adopted.planHash, proposal.planHash); assert.equal(adopted.approvedHash, proposal.planHash);
+    assert.equal(adopted.worktree, stopped.worktree); assert.equal(adopted.branch, stopped.branch);
+    assert.deepEqual(f.store.operation<{state: string}[]>(`${run.id}:repair:feature`)!.map(r => r.state), ['pending']);
+
+    const ready = await engine.run(run.id);
+    assert.equal(ready.status, 'ready', ready.reason || '');
+    assert.ok(ready.finalEvidence.some(e => e.checkId === 'added' && e.code === 0));
+    assert.equal(await f.git.run(['show', `${ready.finalReviewHead}:one.txt`]), 'repair in progress');
   } finally {await f.dispose();}
 });
