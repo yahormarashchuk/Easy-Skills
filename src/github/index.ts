@@ -15,7 +15,7 @@ export class MergeTerminalError extends Error {
 
 export interface GitHub {
   readIssue?(number: number): Promise<Issue>;
-  issue(key: string, title: string, body: string): Promise<number>;
+  issue(key: string, title: string, body: string, metadata?: {labels: string[]; assignSelf: boolean}): Promise<number>;
   pr(key: string, title: string, body: string, head: string, base: string): Promise<PullRequest>;
   viewPr(number: number): Promise<PullRequest>;
   merge(number: number, head: string, options?: MergeOptions): Promise<MergeResult>;
@@ -79,7 +79,7 @@ export class Gh implements GitHub {
     return {number, title: redact(issue.title), body: redact(issue.body || ''), url: `https://github.com/${this.repository}/issues/${number}`,
       labels: (issue.labels || []).map((label: any) => redact(typeof label === 'string' ? label : String(label.name))), state: issue.state};
   }
-  async issue(key: string, title: string, body: string): Promise<number> {
+  async issue(key: string, title: string, body: string, metadata?: {labels: string[]; assignSelf: boolean}): Promise<number> {
     const marker = `<!-- easy-skills:${key} -->`;
     for (let page = 1; ; page++) {
       const issues = await this.api<{number: number; body: string; pull_request?: unknown}[]>(`issues?state=all&per_page=100&page=${page}`);
@@ -87,7 +87,28 @@ export class Gh implements GitHub {
       if (match) return match.number;
       if (issues.length < 100) break;
     }
-    const issue = await this.api<{number: number}>('issues', 'POST', {title: redact(title), body: `${redact(body)}\n\n${marker}`});
+    const labels: string[] = [];
+    if (metadata) {
+      for (let page = 1; ; page++) {
+        const available = await this.api<{name: string}[]>(`labels?per_page=100&page=${page}`);
+        labels.push(...available.filter(label => metadata.labels.some(wanted => wanted.toLowerCase() === label.name.toLowerCase())).map(label => label.name));
+        if (available.length < 100) break;
+      }
+    }
+    const assignees = metadata?.assignSelf ? [(await this.request<{login: string}>(['api', '--hostname', 'github.com', 'user'])).login] : undefined;
+    let type: string | undefined;
+    if (metadata) {
+      try {
+        const types = await this.api<{name: string; is_enabled?: boolean}[]>('issue-types');
+        const wanted = metadata.labels.includes('bug') ? 'bug' : 'feature';
+        type = types.find(item => item.is_enabled !== false && item.name.toLowerCase() === wanted)?.name;
+      } catch (error) {
+        // Personal repositories and organizations without Issue types can return 404.
+        if (!(error instanceof GitHubHttpError) || error.status !== 404) throw error;
+      }
+    }
+    const issue = await this.api<{number: number}>('issues', 'POST', {title: redact(title), body: `${redact(body)}\n\n${marker}`,
+      ...(metadata ? {labels, assignees, ...(type ? {type} : {})} : {})});
     return issue.number;
   }
   private fromApi(pr: any): PullRequest {

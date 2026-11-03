@@ -400,7 +400,7 @@ export class Guided {
       `Investigate the task, relevant code, tests and skills. Keep unrelated linked Issues out of scope. Derive meaningful acceptance criteria and explicit exclusions. Ask only important questions that repository evidence cannot answer. Inspect related references only when useful; do not run checks. The source checkout can differ from the target: inspect git show ${discovery.baseHead}:PATH for relevant target code without changing branches. For feedback, inspect the provided existing worktree and actual diff as well.\nTask: ${JSON.stringify(source)}\nApproved project rules: ${JSON.stringify(knowledgeSnapshot(root))}\nDiscovery: ${JSON.stringify(discovery)}\nPrevious PR: ${previous?.finalPr?.url || 'none'}`, TaskReply);
     this.ui.say('Specification:\n' + reply.specification + '\nAcceptance:\n' + reply.acceptance.map(s => '- ' + s).join('\n') + '\nOut of scope:\n' + reply.outOfScope.map(s => '- ' + s).join('\n') + '\nOpen questions: 0');
     if (!await this.ui.confirm('task:specification', 'Continue to technical planning with this specification?')) throw new Error('Task specification was not confirmed');
-    const workflow = previous?.plan.workflow || {mode: 'direct' as const, ...(source.issue ? {issue: source.issue.number} : {}),
+    const workflow = previous?.plan.workflow || {mode: 'direct' as const, issueHistory: true, ...(source.issue ? {issue: source.issue.number} : {}),
       baseHead: await git.run(['rev-parse', `refs/remotes/origin/${project.mainBranch}`]),
       permissions: {pushBranch: true, createPullRequest: true, closeIssueOnMerge: true}, context: knowledgeSnapshot(root)};
     let featureId = previous?.plan.featureId || (source.issue ? 'issue-' + source.issue.number : this.store.operation<string>(key + ':feature-id'));
@@ -416,9 +416,10 @@ export class Guided {
   async approve(root: string, plan: Plan, previous?: Run): Promise<Run> {
     this.ui.say(`Task ready: ${plan.title}\n\nImplementation:\n${plan.tasks.map(t => '- ' + t.title + '\n  ' + t.description + '\n  Acceptance: ' + t.acceptance.join('; ')).join('\n')}\n\n` +
       `Required setup and checks:\n${JSON.stringify({setup: plan.project.setup || [], checks: plan.project.checks}, null, 2)}\n` +
-      `Rules revision: ${plan.rulesAgreement?.version}\nIssue: ${plan.workflow?.issue ? '#' + plan.workflow.issue + ' (reuse existing)' : 'none (no Issue will be created)'}\n` +
+      `Rules revision: ${plan.rulesAgreement?.version}\nIssue: ${plan.workflow?.issue ? '#' + plan.workflow.issue + ' (reuse existing)' : plan.workflow?.issueHistory ? 'create before BUILD' : 'none (no Issue will be created)'}\n` +
       `Branch: ${previous?.branch || 'new isolated task branch'}\nPR: ${previous?.finalPr?.url || 'one PR targeting ' + plan.project.mainBranch}\n` +
       `Permissions: modify code in the displayed task scope; run the displayed setup and checks; push the task branch; create and update its PR.\n` +
+      (plan.workflow?.issueHistory ? 'Publish task and repair Issues as the signed-in GitHub account; assign that account and reuse matching repository labels. Link verification evidence and close through the merged PR.\n' : '') +
       (plan.workflow?.issue ? 'Keep the original Issue open until its reviewed PR is actually merged, then close it.\n' : '') +
       `Repair limit: ${plan.repairPolicy?.maxCompletedAttempts} completed corrective attempts. Final merge: manual; no merge authorized.\n` +
       `Scope: ${JSON.stringify(plan.tasks[0]?.scope || 'the displayed specification and acceptance criteria')}\n` +
@@ -436,7 +437,7 @@ export function resolveRun(store: Store, root: string, reference?: string): Run 
   if (reference === 'latest') reference = undefined;
   const canonicalRoot = realpathSync.native(root);
   const runs = store.list().filter(r => r.root === canonicalRoot);
-  const matches = reference ? runs.filter(r => r.id === reference || String(r.plan.workflow?.issue || '') === reference || r.plan.featureId === reference || r.plan.title === reference)
+  const matches = reference ? runs.filter(r => r.id === reference || String(r.parentIssue || r.plan.workflow?.issue || '') === reference || r.plan.featureId === reference || r.plan.title === reference)
     : runs.filter(r => !['merged', 'abandoned', 'stopped'].includes(r.status));
   if (!reference && !matches.length && runs.length) return runs[0]!;
   if (!matches.length) throw new Error('No matching task in this repository. Use easy-skills run to create one.');

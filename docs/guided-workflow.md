@@ -49,7 +49,20 @@ rights or model assignments. Agents do not receive private sessions or runner lo
 
 Optional `plan.workflow` binds the base commit, Issue, knowledge and separate push,
 PR and Issue-completion permissions. It requires one independent task and prohibits
-Issue creation and intermediate merges. Older plans without this field retain their
+intermediate merges. New guided proposals explicitly approve `workflow.issueHistory`:
+they reuse the supplied Issue or create a task Issue before setup, baseline and BUILD.
+Each persisted whole-feature repair gets a separate Bug Issue before corrective BUILD,
+with the stage, revision, failure evidence, parent link and acceptance criteria. Stable
+run/repair markers recover interrupted publication without creating replacement Issues.
+The signed-in `gh` account creates and is assigned the Issues. Existing repository labels
+are matched case-insensitively against Bug/Enhancement and task title/scope words; missing
+labels are skipped. Existing enabled Bug/Feature Issue types are applied when available;
+repositories without Issue types keep labels only. This does not create labels or types,
+or add projects/milestones. Independent VERIFY and REVIEW add revision evidence; the final
+PR links the Issues with `Fixes` and records delivery links. Issues remain open until merge.
+No separate Issues are created for quota waits or each successful build command.
+Older direct plans without `issueHistory` keep their approved publication behavior.
+Older plans without the workflow field retain their
 advanced feature behavior and serialized identity. Direct branches use `codex/`.
 The historical internal worktree resource name remains `integration`; only one task
 branch and worktree exist.
