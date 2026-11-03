@@ -51,7 +51,7 @@ squash-merged branches. External systems cannot be included in a SQLite transact
 reconciliation and conservative stops are therefore required, not exactly-once claims.
 
 Direct plans select one task branch/worktree and one final PR. They reuse an existing
-Issue or publish no Issue, skip task integration/merges, and use the final verification,
+Issue or publish a task Issue when issue history is approved, skip task integration/merges, and use the final verification,
 review, repair and shipping machine. Their approved knowledge snapshot travels without
 a setup commit on main. Feedback records old approval/evidence, replaces the plan after
 new consent, revokes readiness and updates the same PR. PR delivery needs no merge

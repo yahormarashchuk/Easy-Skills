@@ -76,7 +76,7 @@ export class Store {
     this.transaction(() => {
       if (this.list().some(r => r.commonDir === commonDir && r.plan.featureId === plan.featureId && !['merged', 'abandoned'].includes(r.status)))
         throw new Error('An unfinished run already uses this feature ID');
-      if (plan.workflow?.issue && this.list().some(r => r.commonDir === commonDir && r.plan.workflow?.issue === plan.workflow!.issue && !['merged', 'abandoned'].includes(r.status)))
+      if (plan.workflow?.issue && this.list().some(r => r.commonDir === commonDir && (r.parentIssue || r.plan.workflow?.issue) === plan.workflow!.issue && !['merged', 'abandoned'].includes(r.status)))
         throw new Error('An unfinished task already uses this Issue; resume or revise the existing task');
       if (this.list().some(r => r.commonDir === commonDir && r.plan.featureId === plan.featureId)) run.branch += '-' + run.id.slice(0, 8);
       this.db.prepare('INSERT INTO runs VALUES (?,?,?,?)').run(run.id, root, run.revision, JSON.stringify(run));

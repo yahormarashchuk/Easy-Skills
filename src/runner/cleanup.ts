@@ -1,3 +1,4 @@
+import { closeRepairIssues } from './issue-history.js';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { Store } from '../persistence/store.js';
@@ -57,6 +58,7 @@ export async function cleanup(store: Store, id: string, expectedHash: string, gi
       store.event(id, 'cleanup.worktree.removed', resource);
     }
     if (run.parentIssue && (!run.plan.workflow || run.plan.workflow.permissions.closeIssueOnMerge)) await gh.setIssue(run.parentIssue, false, `Feature merged: ${confirmed.url}`);
+    await closeRepairIssues(store, run, gh, confirmed.url);
     run.finalPr = confirmed; run.status = 'merged'; store.save(run, 'cleanup.completed');
     return plan.resources;
   } finally {store.release(key, owner);}

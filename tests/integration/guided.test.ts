@@ -270,6 +270,7 @@ test('feedback replaces approval with retained history and reuses the branch and
   const f = await setup();
   try {
     const plan = await f.wizard.proposal(f.root, '909', f.profile), run = await f.wizard.approve(f.root, plan);
+    assert.equal(plan.workflow?.issueHistory, true);
     const ready = await f.engine.run(run.id); assert.equal(ready.status, 'ready', ready.reason || '');
     const revised = await f.wizard.proposal(f.root, 'Normalize repeated spaces.', f.profile, ready);
     assert.notEqual(hash(revised), ready.planHash);
@@ -297,6 +298,7 @@ test('direct tasks preserve sessions across quota waits, repair failing code, an
         if (builds === 1) throw new ClientError('quota', 'usage limit reached');
         if (builds === 2) writeFileSync(join(o.cwd, 'broken'), '0');
         if (builds === 3) rmSync(join(o.cwd, 'broken'));
+        if (builds === 3) assert.ok([...f.github.objects.keys()].some(key => key.includes(':repair-issue:')), 'Bug Issue must precede corrective BUILD');
       }
       return f.client.run(a, p, o);
     }}});
@@ -304,10 +306,13 @@ test('direct tasks preserve sessions across quota waits, repair failing code, an
     assert.equal(waiting.status, 'waiting_quota'); assert.equal(waiting.finalSessions.BUILD, 'direct-session');
     const ready = await engine.run(run.id); assert.equal(ready.status, 'ready', ready.reason || '');
     assert.equal(builds, 3); assert.equal(sessions[1], 'direct-session');
+    assert.ok(f.github.commentsWritten.some(body => body.includes('Independent VERIFY and REVIEW passed')));
+    assert.ok(f.github.commentsWritten.some(body => body.includes('Delivery PR:')));
     assert.ok(f.store.operation<{state: string}[]>(`${run.id}:repair:feature`)?.some(r => r.state === 'completed'));
     await f.github.merge(ready.finalPr!.number, ready.finalReviewHead!);
     const merged = await engine.reconcileFinalMerge(run.id);
     assert.equal(merged.status, 'merged'); assert.equal(f.github.issues.get(909), false);
+    assert.ok([...f.github.issues.values()].every(open => !open), 'Repair Issues close only after confirmed merge');
   } finally {await f.dispose();}
 });
 
@@ -352,8 +357,10 @@ test('unapproved text-task drafts keep their exact identity and plan across a re
     assert.equal(hash(first), hash(second)); assert.equal(f.counts().planCalls, 1);
     assert.equal(f.counts().taskCalls, 1); assert.equal(f.github.prs.size, 0);
     const approved = await f.wizard.approve(f.root, second), ready = await f.engine.run(approved.id);
-    assert.equal(ready.status, 'ready', ready.reason || ''); assert.equal(ready.parentIssue, undefined);
-    assert.equal(f.github.objects.size, 1); assert.equal(f.github.prs.size, 1);
+    assert.equal(ready.status, 'ready', ready.reason || ''); assert.ok(ready.parentIssue);
+    assert.equal(f.github.objects.size, 2); assert.equal(f.github.prs.size, 1);
+    assert.throws(() => f.store.create(ready.root, ready.commonDir, {...second, featureId: 'duplicate-generated-issue', workflow: {...second.workflow!, issue: ready.parentIssue}}), /already uses this Issue/);
+    assert.equal(resolveRun(f.store, f.root, String(ready.parentIssue)).id, ready.id);
     assert.equal(resolveRun(f.store, f.root, 'latest').id, ready.id);
     assert.equal(resolveRun(f.store, f.root, ready.plan.title).id, ready.id);
   } finally {await f.dispose();}

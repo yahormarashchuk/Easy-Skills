@@ -12,7 +12,7 @@ import { alive, ensureDir, hash, message, now, redact, rulesHash, rejectSymlinkP
 import { assembleContext, type ContextManifest } from './context.js';
 import { recordFailure, confirmedProgress } from './failures.js';
 import { requireCompatibility } from './compatibility.js';
-import { CheckFailure, failureBundle } from './check-failure.js';
+import { CheckFailure, failureBundle, cleanExcerpt } from './check-failure.js';
 import { requireAgreement } from './onboarding.js';
 import { assertProtected, protectedManifest } from './protected-inputs.js';
 import { knowledgeSnapshot } from './discovery.js';
@@ -20,6 +20,7 @@ import { loadProject } from '../cli/project.js';
 import { CodeFailure, startRepair, pendingRepair, completeRepair, repairKey, type Repair } from './repairs.js';
 import { ownerAlive, processIdentity } from '../process-identity.js';
 import { ignoredOutputs } from './setup-outputs.js';
+import { publishRepairIssue, repairIssues, deliveryIssues, issueLabels, closeRepairIssues } from './issue-history.js';
 
 class Blocked extends Error {}
 export interface EngineOptions {client?: Client; github?: GitHub; signal?: AbortSignal; testRemote?: string}
@@ -272,6 +273,12 @@ export class Engine {
     }
     await git.carryIgnoredControls(run.root, run.worktree);
     await this.guard(run, run.worktree);
+    if (run.plan.workflow?.issueHistory && !run.parentIssue) {
+      run.parentIssue = await github.issue(`${run.id}:feature`, run.plan.title,
+        `## Trigger / current behavior\n\n${run.plan.spec}\n\n## Acceptance criteria\n\n${run.plan.tasks.flatMap(t => t.acceptance).map(a => '- ' + a).join('\n')}\n\n## Development history\n\nRun: ${run.id}\nApproved plan: ${run.planHash}\nRepair Issues and the verified delivery PR will be linked here.`,
+        {labels: issueLabels(run, false), assignSelf: true});
+      this.store.save(run, 'github.parent.created');
+    }
     await this.setup(run, git, run.worktree);
     if (!this.store.operation(`${run.id}:baseline`)) {
       // Older alpha runs may already contain implementation: never label that state a baseline.
@@ -689,7 +696,10 @@ export class Engine {
       if (run.finalPhase === 'REPAIR') {
         const repair = pendingRepair(this.store, run, 'feature');
         if (!repair) throw new Blocked('Persisted repair cursor has no matching intent');
+        const issue = await publishRepairIssue(this.store, run, github, repair);
+        if (issue && run.parentIssue) await github.commentOnce(run.parentIssue, `repair:${repair.id}`, `Repair required: #${issue}\n\n${cleanExcerpt(repair.reason, this.store.home)}`);
         await this.build(run, git, cwd, undefined, undefined, repair.id, `Repair whole-feature failure ${JSON.stringify(repair)}. Preserve all integrated tasks.`);
+        if (issue) await github.commentOnce(issue, `implemented:${repair.id}`, `Corrective BUILD completed at ${await git.head(cwd)}. Independent checks, VERIFY and REVIEW are pending.`);
         this.store.transaction(() => {
           completeRepair(this.store, run, repair.scope, repair.id);
           run.finalPhase = 'SYNC'; run.finalReviewHead = undefined; run.finalEvidence = [];
@@ -715,6 +725,8 @@ export class Engine {
         await this.agent(run, 'REVIEW', cwd, undefined, undefined, `Review the whole feature against ${run.plan.project.mainBranch}, including interactions, end-to-end acceptance, and regressions.`);
         await git.clean(cwd); if (await git.head(cwd) !== head) throw new Blocked('Final REVIEW changed the commit');
         confirmedProgress(this.store, run, 'feature:REVIEW', head);
+        for (const issue of repairIssues(this.store, run)) await github.commentOnce(issue, `verified:${head}`,
+          `Independent VERIFY and REVIEW passed at ${head}. Delivery PR and merge are pending.`);
         run.finalReviewHead = head; run.finalPhase = 'SHIP'; this.store.save(run, 'feature.reviewed');
       } else {
         await git.fetch();
@@ -729,9 +741,12 @@ export class Engine {
           throw new Blocked('The approved task does not authorize branch push and PR creation');
         await git.push(run.branch, cwd);
         run.finalPr = await github.pr(`${run.id}:final`, run.plan.title,
-          `${run.plan.spec}\n\n${run.parentIssue ? `Implements #${run.parentIssue}; stays open until final merge.` : 'Local task; no Issue created.'}\n\nVerified revision: ${head}\n\n${run.finalEvidence.map(e => '- ' + e.checkId + ': passed').join('\n')}\n\nFinal review: ${run.finalReviewHead}\nFinal merge: manual.`, run.branch, run.plan.project.mainBranch);
+          `${run.plan.spec}\n\n${run.plan.workflow?.issueHistory ? deliveryIssues(this.store, run) : run.parentIssue ? `Implements #${run.parentIssue}; stays open until final merge.` : 'Local task; no Issue created.'}\n\nVerified revision: ${head}\n\n${run.finalEvidence.map(e => '- ' + e.checkId + ': passed').join('\n')}\n\nFinal review: ${run.finalReviewHead}\nFinal merge: manual.`, run.branch, run.plan.project.mainBranch);
         if (run.finalPr.headRefOid !== head || run.finalPr.baseRefName !== run.plan.project.mainBranch || run.finalPr.headRefName !== run.branch || run.finalPr.state !== 'OPEN')
           throw new Blocked('Final PR identity or head changed');
+        if (run.plan.workflow?.issueHistory) for (const issue of [run.parentIssue, ...repairIssues(this.store, run)]) {
+          if (issue) await github.commentOnce(issue, `delivery:${head}`, `Verified at ${head}. Delivery PR: ${run.finalPr.url}\nCloses when this PR merges into ${run.plan.project.mainBranch}.`);
+        }
         run.status = 'ready'; this.store.save(run, 'feature.ready', {pr: run.finalPr});
         this.store.enqueue(`${run.id}:ready:${head}`, {runId: run.id, project: run.plan.project.name, feature: run.plan.title,
           state: 'ready', reason: 'Ready for final verification and a separate merge decision', url: run.finalPr.url});
@@ -876,6 +891,7 @@ export class Engine {
           throw new Error('Historical merge does not match persisted approval and verification evidence');
         run.finalPr = pr; run.status = 'merged';
         if (run.parentIssue && (!run.plan.workflow || run.plan.workflow.permissions.closeIssueOnMerge)) await github.setIssue(run.parentIssue, false, `Feature merged: ${pr.url}`);
+        await closeRepairIssues(this.store, run, github, pr.url);
         this.store.save(run, 'feature.merge.reconciled'); return run;
       }
       if (run.status !== 'ready') throw new Error('Feature is not ready');
@@ -889,6 +905,7 @@ export class Engine {
       if (confirmed.state !== 'MERGED' || !confirmed.mergedAt || confirmed.headRefOid !== expectedHead || confirmed.baseRefName !== run.plan.project.mainBranch || confirmed.headRefName !== run.branch) throw new Error('Final merge was not confirmed at the authorized head and target');
       run.finalPr = confirmed; run.status = 'merged';
       if (run.parentIssue && (!run.plan.workflow || run.plan.workflow.permissions.closeIssueOnMerge)) await github.setIssue(run.parentIssue, false, `Feature merged: ${confirmed.url}`);
+      await closeRepairIssues(this.store, run, github, confirmed.url);
       this.store.save(run, 'feature.merged'); return run;
     } finally {this.store.release('run:' + id, owner);}
   }

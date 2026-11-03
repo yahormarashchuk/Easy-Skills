@@ -47,6 +47,7 @@ export const Task = z.object({
 export type Task = z.infer<typeof Task>;
 // Optional on legacy plans: adding this field must never rewrite an old approval.
 export const DirectWorkflow = z.object({mode: z.literal('direct'), issue: z.number().int().positive().optional(),
+  issueHistory: z.boolean().optional(),
   baseHead: z.string().regex(/^[a-f0-9]{40,64}$/),
   permissions: z.object({pushBranch: z.boolean(), createPullRequest: z.boolean(), closeIssueOnMerge: z.boolean()}).strict(),
   context: z.record(z.string().regex(/^\.easy-skills\/(?:rules\/[^:]+|context\/[^:]+|project\.yaml|decisions\/onboarding\.json)$/)
@@ -65,7 +66,7 @@ export const Plan = z.object({
   workflow: DirectWorkflow.optional(),
 }).strict().superRefine((plan, ctx) => {
   if (plan.workflow && (plan.tasks.length !== 1 || plan.tasks[0]?.dependsOn.length || plan.permissions.mergeIntermediate || plan.permissions.publishIssues))
-    ctx.addIssue({code: 'custom', message: 'Direct tasks require one independent task and prohibit Issue creation and intermediate merges'});
+    ctx.addIssue({code: 'custom', message: 'Direct tasks require one independent task, use workflow.issueHistory for Issue publication and prohibit intermediate merges'});
   if (plan.workflow && !plan.tasks[0]?.scope?.paths.length)
     ctx.addIssue({code: 'custom', message: 'Direct tasks require explicit implementation and test scope paths'});
   if (plan.schemaVersion === 2 && (!plan.repairPolicy || !plan.protectedInputs || plan.project.schemaVersion !== 2))
