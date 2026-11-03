@@ -12,8 +12,8 @@ test('PLAN uses the selected model read-only and cannot expand agreed permission
   try {
     mkdirSync(join(f.root, '.easy-skills'), {recursive: true});
     writeFileSync(join(f.root, '.easy-skills/project.yaml'), stringify(f.run.plan.project));
-    const {featureId, title, spec, assignments, permissions} = f.run.plan;
-    const request = {featureId, title, spec, assignments, permissions};
+    const {featureId, title, spec, assignments, permissions, repairPolicy} = f.run.plan;
+    const request = {featureId, title, spec, assignments, permissions, repairPolicy};
     let model = '', mode: string | undefined;
     const plan = await generatePlan(f.store, f.root, request, {...f.client, async run(a, p, o) {
       model = a.model; mode = o.mode; assert.match(p, /UNAPPROVED, READ-ONLY/);
@@ -37,8 +37,8 @@ test('PLAN asks the same session once to correct a result that failed validation
   try {
     mkdirSync(join(f.root, '.easy-skills'), {recursive: true});
     writeFileSync(join(f.root, '.easy-skills/project.yaml'), stringify(f.run.plan.project));
-    const {featureId, title, spec, assignments, permissions} = f.run.plan;
-    const request = {featureId, title, spec, assignments, permissions};
+    const {featureId, title, spec, assignments, permissions, repairPolicy} = f.run.plan;
+    const request = {featureId, title, spec, assignments, permissions, repairPolicy};
     const calls: {prompt: string; session?: string}[] = [];
     const plan = await generatePlan(f.store, f.root, request, {...f.client, async run(_a, prompt, o) {
       calls.push({prompt, session: o.session});
