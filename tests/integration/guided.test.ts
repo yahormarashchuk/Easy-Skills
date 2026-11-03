@@ -623,3 +623,78 @@ test('a task that used its repair attempts continues only when the owner raises 
     assert.equal(ready.status, 'ready', ready.reason || '');
   } finally {await f.dispose();}
 });
+
+test('REVIEW reports every failing file in one repair and re-reviews only files whose diff changed or failed', async () => {
+  const f = await setup();
+  try {
+    const plan = await f.wizard.proposal(f.root, '909', f.profile), run = await f.wizard.approve(f.root, plan);
+    let builds = 0;
+    const reviewed: string[] = [];
+    const engine = new Engine(f.store, {testRemote: f.remote, github: f.github, client: {...f.client, async run(a, p, o) {
+      if (a.model === 'exact-BUILD') {
+        builds++; o.onSession?.(o.session || 'build');
+        if (builds === 1 || builds === 2) writeFileSync(join(o.cwd, 'one.txt'), 'one v' + builds + '\n');
+        writeFileSync(join(o.cwd, 'two.txt'), 'two v' + builds + '\n');
+        return {outcome: 'passed', summary: 'Built', findings: []};
+      }
+      const file = p.match(/Review complete file "([^"]+)"/)?.[1];
+      if (a.model === 'exact-REVIEW' && file) {
+        o.onSession?.(o.session || 'review'); reviewed.push(file);
+        if (file === 'one.txt' && builds === 1) {return {outcome: 'failed', summary: 'one.txt is wrong', findings: ['ONE_FINDING']};}
+        if (file === 'two.txt' && builds < 3) return {outcome: 'failed', summary: 'two.txt is wrong in build ' + builds, findings: ['TWO_FINDING ' + builds]};
+        return {outcome: 'passed', summary: 'Reviewed ' + file, findings: []};
+      }
+      return f.client.run(a, p, o);
+    }}});
+    const ready = await engine.run(run.id);
+    assert.equal(ready.status, 'ready', ready.reason || '');
+    const repairs = f.store.operation<{reason: string; failedStage: string}[]>(`${run.id}:repair:feature`)!;
+    assert.equal(repairs.length, 2);
+    assert.match(repairs[0]!.reason, /problems in 2 of 2 changed files[\s\S]*one\.txt[\s\S]*ONE_FINDING[\s\S]*two\.txt[\s\S]*TWO_FINDING 1/);
+    assert.deepEqual(reviewed, ['one.txt', 'two.txt', 'one.txt', 'two.txt', 'two.txt'], 'one.txt passed unchanged in round two and is not reviewed again');
+  } finally {await f.dispose();}
+});
+
+test('a task approved without Issue history publishes its task and earlier repairs once the owner grants it', async () => {
+  const f = await setup();
+  try {
+    const proposed = await f.wizard.proposal(f.root, 'Normalize names', f.profile);
+    const plan = structuredClone(proposed); delete plan.workflow!.issueHistory;
+    const run = await f.wizard.approve(f.root, plan);
+    let failing = true, rounds = 0;
+    const engine = new Engine(f.store, {testRemote: f.remote, github: f.github, client: {...f.client, async run(a, p, o) {
+      if (failing && a.model === 'exact-VERIFY') {o.onSession?.(o.session || 'verify'); return {outcome: 'failed', summary: 'Gap ' + ++rounds, findings: ['Missing ' + rounds]};}
+      return f.client.run(a, p, o);
+    }}});
+    const stopped = await engine.run(run.id);
+    assert.equal(stopped.status, 'needs_decision'); assert.match(stopped.reason!, /repair limit reached/);
+    assert.ok(![...f.github.objects.keys()].some(key => key.startsWith(run.id)), 'no Issue without the grant');
+
+    const proposal = await engine.adoptConfiguration(run.id, undefined, 1, true);
+    assert.deepEqual(proposal.issueHistory, {from: false, to: true, repairs: 3});
+    await engine.adoptConfiguration(run.id, proposal.hash, 1, true);
+    failing = false;
+    const ready = await engine.run(run.id);
+    assert.equal(ready.status, 'ready', ready.reason || '');
+    const keys = [...f.github.objects.keys()];
+    assert.ok(keys.includes(`${run.id}:feature`));
+    assert.equal(keys.filter(key => key.startsWith(`${run.id}:repair-issue:`)).length, 3);
+    assert.ok(ready.parentIssue);
+  } finally {await f.dispose();}
+});
+
+test('VERIFY and REVIEW are told which carried source-checkout inputs belong to the task', async () => {
+  const f = await setup();
+  try {
+    const plan = await f.wizard.proposal(f.root, '909', f.profile), run = await f.wizard.approve(f.root, plan);
+    writeFileSync(join(f.root, 'one.txt'), 'Owner planning input\n');
+    const prompts: Record<string, string[]> = {VERIFY: [], REVIEW: [], BUILD: []};
+    const engine = new Engine(f.store, {testRemote: f.remote, github: f.github, client: {...f.client, async run(a, p, o) {
+      if (o.stage) prompts[o.stage]?.push(p);
+      return f.client.run(a, p, o);
+    }}});
+    assert.equal((await engine.run(run.id)).status, 'ready');
+    for (const stage of ['VERIFY', 'REVIEW']) assert.ok(prompts[stage]!.length && prompts[stage]!.every(p => /Approved task inputs carried[^\n]*\["one\.txt"\]/.test(p)), stage);
+    assert.ok(prompts.BUILD!.every(p => !p.includes('Approved task inputs carried')));
+  } finally {await f.dispose();}
+});

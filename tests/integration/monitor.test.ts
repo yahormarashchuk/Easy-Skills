@@ -30,7 +30,7 @@ test('the task table lists every task with the ID status accepts, those waiting 
   } finally {await f.dispose();}
 });
 
-test('watching a run redraws until it waits for the owner, and Ctrl+C only stops watching', async () => {
+test('watching a run stays open while it waits for the owner, shows the next command, and Ctrl+C only stops watching', async () => {
   const f = await fixture();
   try {
     const run = f.engine.approve(f.run.id, f.run.planHash); run.status = 'running'; f.store.save(run, 'fixture.running');
@@ -46,21 +46,29 @@ test('watching a run redraws until it waits for the owner, and Ctrl+C only stops
 
     const second = screen();
     const following = watchRun(f.store, run.id, {style, out: second.out, intervalMs: 20});
-    const current = f.store.get(run.id); current.status = 'needs_decision'; current.reason = 'Fixture decision';
-    f.store.save(current, 'run.suspended', {reason: 'Fixture decision'});
-    assert.equal((await following).status, 'needs_decision');
-    assert.match(second.chunks.join(''), /Stopped: Fixture decision/);
+    const current = f.store.get(run.id); current.status = 'needs_decision'; current.reason = 'Approved repair limit reached (3 completed attempts in feature)';
+    f.store.save(current, 'run.suspended', {reason: current.reason});
+    await new Promise(resolve => setTimeout(resolve, 120));
+    const waiting = second.chunks.join('');
+    assert.match(waiting, /Stopped: Approved repair limit reached/);
+    assert.match(waiting, />>> YOUR ACTION: easy-skills adopt-config sample --extra-repairs 2/);
+    assert.doesNotMatch(waiting, /Stopped watching/, 'a run waiting for the owner keeps the view open');
+    const stopped = f.store.get(run.id); stopped.status = 'stopped'; f.store.save(stopped, 'control.applied');
+    assert.equal((await following).status, 'stopped');
   } finally {await f.dispose();}
 });
 
-test('watching several tasks ends once none is still working', async () => {
+test('watching several tasks stays open for paused ones and ends once all have finished', async () => {
   const f = await fixture();
   try {
     const run = f.engine.approve(f.run.id, f.run.planHash); run.status = 'paused'; f.store.save(run, 'fixture.paused');
     const view = screen();
-    const runs = await watchTasks(f.store, f.run.root, {style, out: view.out, intervalMs: 20});
-    assert.deepEqual(runs.map(r => r.status), ['paused']);
+    const watching = watchTasks(f.store, f.run.root, {style, out: view.out, intervalMs: 20});
+    await new Promise(resolve => setTimeout(resolve, 80));
     assert.match(view.chunks.join(''), /sample\s+\S{8}\s+BUILD\s+paused/);
+    const stopped = f.store.get(run.id); stopped.status = 'stopped'; f.store.save(stopped, 'control.applied');
+    const runs = await watching;
+    assert.deepEqual(runs.map(r => r.status), ['stopped']);
   } finally {await f.dispose();}
 });
 

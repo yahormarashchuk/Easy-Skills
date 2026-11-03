@@ -261,7 +261,7 @@ actively merging PRs require reconciliation before further changes.
 | `easy-skills watch [task]` | Follow again after closing the terminal; Ctrl+C stops watching, never the task. |
 | `easy-skills resume [task]` | Recover an approved task safely. |
 | `easy-skills revise <task> "feedback"` | Update an existing PR; use `latest`, an Issue number, or a displayed task title. |
-| `easy-skills adopt-config <task> [--extra-repairs N]` | Continue a task stopped for a decision with the approved project configuration (added checks) or a raised repair limit. |
+| `easy-skills adopt-config <task> [--extra-repairs N] [--issue-history]` | Continue a task stopped for a decision with the approved project configuration (added checks), a raised repair limit, or GitHub Issue history. |
 | `easy-skills rules ["change"]` | Review or update the project rules. |
 | `easy-skills config` | Select or edit exact stage model profiles. |
 | `easy-skills install-skills --client codex --interactive` | Install official packaged skills with reviewed backups. |

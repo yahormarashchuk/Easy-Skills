@@ -114,7 +114,7 @@ export class Engine {
    * After the owner approves a new project configuration, this binds the task to it, keeping its branch, commits and any
    * pending repair. Approved checks can be added but never removed or changed.
    */
-  async adoptConfiguration(id: string, approvedHash?: string, extraRepairs = 0) {
+  async adoptConfiguration(id: string, approvedHash?: string, extraRepairs = 0, issueHistory = false) {
     const owner = this.store.acquire('run:' + id), run = this.store.get(id);
     try {
       if (!['needs_decision', 'paused'].includes(run.status) || ownerAlive(run.childPid, run.childIdentity))
@@ -130,13 +130,15 @@ export class Engine {
       // Raising the limit is an owner decision inside the new plan; it counts attempts already made and never lowers the limit.
       const limit = extraRepairs ? Math.max(run.plan.repairPolicy?.maxCompletedAttempts ?? 0, completed + extraRepairs) : run.plan.repairPolicy?.maxCompletedAttempts;
       const plan = Plan.parse({...run.plan, project, protectedInputs: protectedManifest(run.root, project), rulesHash: rulesHash(run.root),
-        rulesAgreement: requireAgreement(run.root), workflow: {...run.plan.workflow, context: knowledgeSnapshot(run.root)},
+        // Tasks approved before Issue history existed publish it only after the owner grants it here.
+        rulesAgreement: requireAgreement(run.root), workflow: {...run.plan.workflow, context: knowledgeSnapshot(run.root), ...(issueHistory ? {issueHistory: true} : {})},
         ...(limit === undefined ? {} : {repairPolicy: {maxCompletedAttempts: limit}})});
       if (hash(plan) === run.planHash) throw new Error('The task already uses the approved project configuration');
       const proposal = {runId: id, previousPlanHash: run.planHash, planHash: hash(plan), rulesAgreement: plan.rulesAgreement,
         addedChecks: project.checks.filter(check => !previous.checks.some(c => hash(c) === hash(check))),
         setupChanged: hash(project.setup || []) !== hash(previous.setup || []), phase: run.finalPhase,
-        repairLimit: {from: run.plan.repairPolicy?.maxCompletedAttempts, to: plan.repairPolicy?.maxCompletedAttempts, completed}};
+        repairLimit: {from: run.plan.repairPolicy?.maxCompletedAttempts, to: plan.repairPolicy?.maxCompletedAttempts, completed},
+        issueHistory: {from: !!run.plan.workflow.issueHistory, to: !!plan.workflow!.issueHistory, repairs: repairs.length}};
       const digest = hash(proposal);
       if (!approvedHash) return {...proposal, hash: digest, status: run.status};
       if (approvedHash !== digest) throw new Error('The configuration proposal changed; review it again');
@@ -284,6 +286,9 @@ export class Engine {
         {labels: issueLabels(run, false), assignSelf: true});
       this.store.save(run, 'github.parent.created');
     }
+    // A task granted Issue history after repairs already happened publishes those repairs too, so GitHub shows every round.
+    if (run.plan.workflow?.issueHistory) for (const repair of this.store.operation<Repair[]>(repairKey(run, 'feature')) || [])
+      if (repair.state === 'completed') await publishRepairIssue(this.store, run, github, repair);
     await this.setup(run, git, run.worktree);
     if (!this.store.operation(`${run.id}:baseline`)) {
       // Older alpha runs may already contain implementation: never label that state a baseline.
@@ -391,19 +396,39 @@ export class Engine {
       const covered: {path: string; diffHash: string}[] = [], head = await new Git(cwd).head(cwd);
       const key = `${run.id}:review-coverage:${task?.id || 'feature'}:${head}`;
       const previousCoverage = this.store.operation<{base: string; covered: {path: string; diffHash: string}[]}>(key);
+      // A file whose diff against the same base already passed review keeps that result across repair commits.
+      const passedKey = `${run.id}:review-passed:${task?.id || 'feature'}`;
+      const saved = this.store.operation<{base: string; passed: {path: string; diffHash: string}[]}>(passedKey);
+      const passed = saved?.base === base ? saved.passed : [];
       let result: StageResult = {outcome: 'passed', summary: 'No changed paths', findings: []};
+      const failures: string[] = [];
       for (const path of files) {
         let diff: string;
         try {diff = await new Git(cwd).run(['diff', '--no-ext-diff', '--no-textconv', base, 'HEAD', '--', path], cwd);}
         catch {throw new ClientError('review_input', 'Cannot capture complete file diff; split the task or request an explicit review decision');}
         if (diff.length > 200_000 || /^Binary files /m.test(diff)) throw new ClientError('review_input', 'File diff requires a separate review decision: ' + path);
-        if (previousCoverage?.base !== base || !previousCoverage.covered.some(c => c.path === path && c.diffHash === hash(diff)))
-          result = await this.agent(run, stage, cwd, taskState, task, extra + `\nReview complete file ${JSON.stringify(path)} against ${base}:\n${diff}`, skill, false);
+        const entry = {path, diffHash: hash(diff)};
+        const known = (previousCoverage?.base === base && previousCoverage.covered.some(c => c.path === path && c.diffHash === entry.diffHash)) ||
+          passed.some(c => c.path === path && c.diffHash === entry.diffHash);
+        if (!known) {
+          // Every file is reviewed before repair, so one repair receives all findings instead of one file's per round.
+          try {result = await this.agent(run, stage, cwd, taskState, task, extra + `\nReview complete file ${JSON.stringify(path)} against ${base}:\n${diff}`, skill, false);}
+          catch (error) {
+            if (!(error instanceof CodeFailure)) throw error;
+            failures.push(`${path}:\n${message(error)}`);
+            await new Git(cwd).clean(cwd);
+            if (await new Git(cwd).head(cwd) !== head) throw new Blocked('REVIEW changed the revision; coverage was not accepted');
+            continue;
+          }
+        }
         await new Git(cwd).clean(cwd);
         if (await new Git(cwd).head(cwd) !== head) throw new Blocked('REVIEW changed the revision; coverage was not accepted');
-        covered.push({path, diffHash: hash(diff)});
+        covered.push(entry);
         this.store.recordOperation(key, run.id, 'review.coverage', {head, base, required: files, covered});
+        this.store.recordOperation(passedKey, run.id, 'review.passed', {base, passed: [...passed.filter(c => c.path !== path), entry]});
+        passed.splice(0, passed.length, ...passed.filter(c => c.path !== path), entry);
       }
+      if (failures.length) throw new CodeFailure(`REVIEW found problems in ${failures.length} of ${files.length} changed files:\n\n` + failures.join('\n\n'));
       if (!files.length) result = await this.agent(run, stage, cwd, taskState, task, extra + '\nRunner observed no changed paths.', skill, false);
       return result;
     }
@@ -416,6 +441,11 @@ export class Engine {
     const sessions = taskState ? taskState.sessions : run.finalSessions;
     const contextKey = `${run.id}:context:${task?.id || 'feature'}:${stage}`;
     const previous = this.store.operation<{session: string; manifest: ContextManifest}>(contextKey);
+    // Without this, REVIEW took carried planning files for unrelated additions and asked to delete what VERIFY required.
+    const carried = (this.store.events(run.id) as {type: string; data: string}[]).find(e => e.type === 'integration.created');
+    const inputs: string[] = carried ? JSON.parse(carried.data || '{}').carried || [] : [];
+    if ((stage === 'VERIFY' || stage === 'REVIEW') && inputs.length)
+      extra += '\nApproved task inputs carried from the source checkout into the first task commit; they belong to this task, update them in place and never delete them as unrelated additions: ' + JSON.stringify(inputs);
     if (stage === 'VERIFY') extra += '\nAvailable approved diagnostic commands: ' + JSON.stringify(run.plan.project.checks.filter(c => run.plan.verification?.diagnostics.includes(c.id)).map(c => ({command: c.command, args: c.args}))) + '\nAvailable browser tools: ' + JSON.stringify(run.plan.verification?.browserTools || []);
     const assembled = assembleContext({...run, root: cwd}, stage, task, extra, skill);
     this.store.event(run.id, 'context.assembled', {stage, task: task?.id, manifest: assembled.manifest});
@@ -841,7 +871,9 @@ export class Engine {
   async abandon(id: string) {
     const owner = this.store.acquire('run:' + id), run = this.store.get(id), github = this.options.github || new Gh(run.plan.project.repository, run.root);
     try {
-      if (this.store.locked('worker:' + id) || ownerAlive(run.childPid, run.childIdentity)) throw new Error('Stop the active executor before abandonment');
+      // Holding the run lock proves no execution is in progress; an idle worker (paused or waiting for a decision) exits
+      // by itself once it sees the abandoned status, so only a live client blocks abandonment.
+      if (ownerAlive(run.childPid, run.childIdentity)) throw new Error('Stop the active executor before abandonment');
       if (run.status === 'merged') throw new Error('Merged runs remain merged');
       for (const saved of [run.finalPr, ...run.tasks.map(t => t.pr)].filter((pr): pr is PullRequest => !!pr)) {
         const actual = await github.viewPr(saved.number);

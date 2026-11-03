@@ -18,7 +18,8 @@ export async function publishRepairIssue(store: Store, run: Run, github: GitHub,
     `Run: ${run.id}\nStage: ${repair.failedStage}\nRevision: ${repair.head}\nParent: #${run.parentIssue}\n\n` +
     (repair.bundle ? '```json\n' + cleanExcerpt(JSON.stringify(repair.bundle, null, 2), store.home) + '\n```' : 'See the stage findings above.') +
     `\n\n## Expected behavior / acceptance criteria\n\n- Fix the reported failure within the approved task scope.\n- Pass the affected checks and independent VERIFY and REVIEW without weakening assertions.\n- Link the verified revision and delivery PR before closure.\n\n## Scope\n\n${run.plan.tasks.map(t => t.title).join('\n')}`;
-  const number = await github.issue(key, `Bug: ${cleanExcerpt(repair.reason, store.home).replace(/[\r\n]+/g, ' ').slice(0, 170)}`, body,
+  // The title names the stage that sent the work back to BUILD, so the Issue list reads as the task's history.
+  const number = await github.issue(key, `Bug (${repair.failedStage}): ${cleanExcerpt(repair.reason, store.home).replace(/[\r\n]+/g, ' ').slice(0, 160)}`, body,
     {labels: issueLabels(run, true), assignSelf: true});
   store.recordOperation(key, run.id, 'github.repair.created', number);
   return number;

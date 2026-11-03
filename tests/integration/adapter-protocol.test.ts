@@ -77,6 +77,10 @@ test('Codex accepts a completed retried turn while terminal/protocol failures re
     else await assert.rejects(call);
   }
   assert.equal(decode('codex', JSON.stringify({type: 'turn.failed', error: {status: 429, message: 'Provider wait'}})).kind, 'quota');
+  // Codex reports exhausted workspace credits as prose without a status or code.
+  assert.equal(decode('codex', JSON.stringify({type: 'turn.failed', error: {message: 'Your workspace is out of credits. Ask your workspace owner to refill in order to continue.'}})).kind, 'quota');
+  assert.equal(decode('codex', JSON.stringify({type: 'error', message: 'Your workspace is out of credits.'})).kind, 'quota');
+  assert.equal(decode('codex', JSON.stringify({type: 'turn.failed', error: {message: 'Sandbox denied the command'}})).kind, undefined);
   const args = invocation({provider: 'claude-code', model: 'fixture'}, undefined, 'read', undefined,
     {capabilities: {diagnostics: ['"C:/Program Files (x86)/node.exe" "check \u2603.mjs"'], browserTools: []}}).args;
   assert.ok(args.includes('Bash("C:/Program Files (x86)/node.exe" "check \u2603.mjs")'));
