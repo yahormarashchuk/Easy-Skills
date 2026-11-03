@@ -23,6 +23,8 @@ import { ignoredOutputs } from './setup-outputs.js';
 import { publishRepairIssue, repairIssues, deliveryIssues, issueLabels, closeRepairIssues, allRepairs } from './issue-history.js';
 
 class Blocked extends Error {}
+/** Generated files whose full diff is too large to review line by line. */
+const GENERATED_FILE = /(?:\.Designer\.cs|ModelSnapshot\.cs|\.g\.cs|(?:^|\/)(?:package-lock\.json|yarn\.lock|pnpm-lock\.yaml|packages\.lock\.json))$/i;
 export interface EngineOptions {client?: Client; github?: GitHub; signal?: AbortSignal; testRemote?: string}
 export class Engine {
   readonly client: Client;
@@ -406,13 +408,20 @@ export class Engine {
         let diff: string;
         try {diff = await new Git(cwd).run(['diff', '--no-ext-diff', '--no-textconv', base, 'HEAD', '--', path], cwd);}
         catch {throw new ClientError('review_input', 'Cannot capture complete file diff; split the task or request an explicit review decision');}
-        if (diff.length > 200_000 || /^Binary files /m.test(diff)) throw new ClientError('review_input', 'File diff requires a separate review decision: ' + path);
         const entry = {path, diffHash: hash(diff)};
+        let shown = diff;
+        if (/^Binary files /m.test(diff)) throw new ClientError('review_input', 'File diff requires a separate review decision: ' + path);
+        if (diff.length > 200_000) {
+          // Generated output (EF migration designers and snapshots, lock files) is checked through its head and tail, with the
+          // omission stated to the reviewer; any other oversized file still needs an owner decision.
+          if (!GENERATED_FILE.test(path)) throw new ClientError('review_input', 'File diff requires a separate review decision: ' + path);
+          shown = diff.slice(0, 60_000) + `\n\n[The runner omitted ${diff.length - 80_000} characters from the middle of this generated file's diff. Review the head and tail shown and the source that produces it.]\n\n` + diff.slice(-20_000);
+        }
         const known = (previousCoverage?.base === base && previousCoverage.covered.some(c => c.path === path && c.diffHash === entry.diffHash)) ||
           passed.some(c => c.path === path && c.diffHash === entry.diffHash);
         if (!known) {
           // Every file is reviewed before repair, so one repair receives all findings instead of one file's per round.
-          try {result = await this.agent(run, stage, cwd, taskState, task, extra + `\nReview complete file ${JSON.stringify(path)} against ${base}:\n${diff}`, skill, false);}
+          try {result = await this.agent(run, stage, cwd, taskState, task, extra + `\nReview complete file ${JSON.stringify(path)} against ${base}:\n${shown}`, skill, false);}
           catch (error) {
             if (!(error instanceof CodeFailure)) throw error;
             failures.push(`${path}:\n${message(error)}`);

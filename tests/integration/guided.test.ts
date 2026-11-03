@@ -727,3 +727,32 @@ test('a new plan approves a repair budget of ten attempts unless told otherwise'
     assert.match(f.ui.messages.join('\n'), /Repair limit: 10 completed corrective attempts/);
   } finally {await f.dispose();}
 });
+
+test('REVIEW reads a generated file through its head and tail, but an oversized hand-written file still needs a decision', async () => {
+  for (const name of ['Migrations/20260101_Add.Designer.cs', 'src/big-logic.cs']) {
+    const f = await setup();
+    try {
+      const plan = await f.wizard.proposal(f.root, '909', f.profile), run = await f.wizard.approve(f.root, plan);
+      const prompts: string[] = [];
+      const engine = new Engine(f.store, {testRemote: f.remote, github: f.github, client: {...f.client, async run(a, p, o) {
+        if (a.model === 'exact-BUILD') {
+          const file = join(o.cwd, name); mkdirSync(join(file, '..'), {recursive: true});
+          writeFileSync(file, Array.from({length: 12_000}, (_, i) => 'line ' + i + ' of generated output').join('\n') + '\n');
+        }
+        if (a.model === 'exact-REVIEW') prompts.push(p);
+        return f.client.run(a, p, o);
+      }}});
+      // The scope guard only allows approved paths; widen it to the whole fixture for this scenario.
+      const stored = f.store.get(run.id); stored.plan.tasks[0]!.scope = {areas: [], paths: ['.']}; stored.planHash = hash(stored.plan); stored.approvedHash = stored.planHash; f.store.save(stored, 'fixture.scope');
+      const result = await engine.run(run.id);
+      if (name.endsWith('.Designer.cs')) {
+        assert.equal(result.status, 'ready', result.reason || '');
+        const text = prompts.find(p => p.includes('Add.Designer.cs'))!;
+        assert.match(text, /The runner omitted \d+ characters from the middle of this generated file/);
+        assert.ok(text.includes('line 0 of') && text.includes('line 11999 of'));
+      } else {
+        assert.equal(result.status, 'needs_decision'); assert.match(result.reason!, /requires a separate review decision: src\/big-logic\.cs/);
+      }
+    } finally {await f.dispose();}
+  }
+});
