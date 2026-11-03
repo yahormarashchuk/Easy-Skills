@@ -81,12 +81,8 @@ export class Gh implements GitHub {
   }
   async issue(key: string, title: string, body: string, metadata?: {labels: string[]; assignSelf: boolean}): Promise<number> {
     const marker = `<!-- easy-skills:${key} -->`;
-    for (let page = 1; ; page++) {
-      const issues = await this.api<{number: number; body: string; pull_request?: unknown}[]>(`issues?state=all&per_page=100&page=${page}`);
-      const match = issues.find(i => !i.pull_request && i.body?.includes(marker));
-      if (match) return match.number;
-      if (issues.length < 100) break;
-    }
+    const existing = await this.markedIssue(key, marker);
+    if (existing) return existing;
     const labels: string[] = [];
     if (metadata) {
       for (let page = 1; ; page++) {
@@ -110,6 +106,21 @@ export class Gh implements GitHub {
     const issue = await this.api<{number: number}>('issues', 'POST', {title: redact(title), body: `${redact(body)}\n\n${marker}`,
       ...(metadata ? {labels, assignees, ...(type ? {type} : {})} : {})});
     return issue.number;
+  }
+  /**
+   * Finds an Issue created earlier for this key, so a retry never creates a second one. Paging through every Issue with
+   * its body exceeded the 1 MiB output limit on large repositories; search returns only matches, and the signed-in
+   * account's newest Issues cover one created moments ago that the search index does not show yet.
+   */
+  private async markedIssue(key: string, marker: string): Promise<number | undefined> {
+    type Found = {number: number; body?: string | null; pull_request?: unknown};
+    const matches = (issues: Found[]) => issues.find(issue => !issue.pull_request && issue.body?.includes(marker))?.number;
+    const query = `repo:${this.repository} is:issue in:body "easy-skills:${key}"`;
+    const search = await this.request<{items?: Found[]}>(['api', '--hostname', 'github.com', `search/issues?q=${encodeURIComponent(query)}&per_page=10`, '-H', 'X-GitHub-Api-Version: 2026-03-10']);
+    const found = matches(search?.items || []);
+    if (found) return found;
+    const login = (await this.request<{login: string}>(['api', '--hostname', 'github.com', 'user'])).login;
+    return matches(await this.api<Found[]>(`issues?creator=${encodeURIComponent(login)}&state=all&sort=created&direction=desc&per_page=10`));
   }
   private fromApi(pr: any): PullRequest {
     return {number: pr.number, url: pr.html_url, headRefOid: pr.head.sha,

@@ -52,3 +52,23 @@ test('Issue metadata uses the authenticated author and only existing case-insens
   assert.equal(await gh.issue('stable', 'Bug: snapshot', 'Reproduction and acceptance', {labels: ['bug', 'blazor', 'missing'], assignSelf: true}), 42);
   }
 });
+
+test('an earlier Issue for the same key is found without paging through every Issue of the repository', async () => {
+  for (const source of ['search', 'recent', 'none']) {
+    const paths: string[] = [];
+    const gh = new Gh('test/example', '.', async (command, options) => {
+      const path = command.args[3] || ''; paths.push(path);
+      const marked = {number: 7, body: 'Task\n\n<!-- easy-skills:run-1:feature -->'};
+      let value: unknown;
+      if (path.startsWith('search/issues?')) {
+        assert.match(decodeURIComponent(path), /repo:test\/example is:issue in:body "easy-skills:run-1:feature"/);
+        value = {items: source === 'search' ? [{number: 3, body: 'easy-skills:run-1:featureX'}, marked] : []};
+      } else if (path.includes('issues?creator=fixture-owner')) value = source === 'recent' ? [marked] : [];
+      else if (command.args.includes('user')) value = {login: 'fixture-owner'};
+      else {assert.match(JSON.parse(String(options.input)).body, /easy-skills:run-1:feature/); value = {number: 9};}
+      return {code: 0, stdout: JSON.stringify(value), stderr: '', timedOut: false, truncated: false};
+    });
+    assert.equal(await gh.issue('run-1:feature', 'Task', 'Body'), source === 'none' ? 9 : 7, source);
+    assert.ok(!paths.some(path => /issues\?state=all&per_page=100/.test(path)), 'never lists every Issue');
+  }
+});
