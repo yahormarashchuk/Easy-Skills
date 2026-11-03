@@ -29,20 +29,25 @@ test('repair history publishes evidence before repair, survives retries and link
 });
 
 test('Issue metadata uses the authenticated author and only existing case-insensitive repository labels', async () => {
+  for (const mode of ['enabled', 'disabled', 'unsupported']) {
   const gh = new Gh('test/example', '.', async (command, options) => {
     const path = command.args[3];
     let value: unknown;
     if (path?.includes('issues?')) value = [];
     else if (path?.includes('labels?')) value = [{name: 'Bug'}, {name: 'Blazor'}];
-    else if (path?.endsWith('issue-types')) value = [{name: 'Bug', is_enabled: true}];
+    else if (path?.endsWith('issue-types')) {
+      if (mode === 'unsupported') return {code: 1, stdout: JSON.stringify({message: 'Not Found'}), stderr: 'HTTP 404', timedOut: false, truncated: false};
+      value = [{name: 'Bug', is_enabled: mode === 'enabled'}];
+    }
     else if (command.args.includes('user')) value = {login: 'fixture-owner'};
     else {
       const body = JSON.parse(String(options.input));
       assert.deepEqual(body.labels, ['Bug', 'Blazor']); assert.deepEqual(body.assignees, ['fixture-owner']);
-      assert.equal(body.type, 'Bug');
+      assert.equal(body.type, mode === 'enabled' ? 'Bug' : undefined);
       assert.match(body.body, /easy-skills:stable/); value = {number: 42};
     }
     return {code: 0, stdout: JSON.stringify(value), stderr: '', timedOut: false, truncated: false};
   });
   assert.equal(await gh.issue('stable', 'Bug: snapshot', 'Reproduction and acceptance', {labels: ['bug', 'blazor', 'missing'], assignSelf: true}), 42);
+  }
 });

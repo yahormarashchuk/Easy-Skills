@@ -6,7 +6,8 @@ import { repairKey, type Repair } from './repairs.js';
 
 export function issueLabels(run: Run, bug: boolean): string[] {
   const paths = run.plan.tasks.flatMap(task => task.scope?.paths || []).join(' ');
-  return [...new Set([bug ? 'bug' : 'enhancement', ...(paths + ' ' + run.plan.title).split(/[^\p{L}\p{N}]+/u).filter(Boolean)])];
+  const kind = bug || /\b(?:fix|bug|regression|failure|broken)\b/i.test(run.plan.title) ? 'bug' : 'enhancement';
+  return [...new Set([kind, ...(paths + ' ' + run.plan.title).split(/[^\p{L}\p{N}]+/u).filter(Boolean)])];
 }
 export async function publishRepairIssue(store: Store, run: Run, github: GitHub, repair: Repair): Promise<number | undefined> {
   if (!run.plan.workflow?.issueHistory) return;
