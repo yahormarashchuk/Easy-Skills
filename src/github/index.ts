@@ -16,7 +16,7 @@ export class MergeTerminalError extends Error {
 export interface GitHub {
   readIssue?(number: number): Promise<Issue>;
   issue(key: string, title: string, body: string, metadata?: {labels: string[]; assignSelf: boolean}): Promise<number>;
-  pr(key: string, title: string, body: string, head: string, base: string): Promise<PullRequest>;
+  pr(key: string, title: string, body: string, head: string, base: string, metadata?: {labels: string[]; assignSelf: boolean}): Promise<PullRequest>;
   viewPr(number: number): Promise<PullRequest>;
   merge(number: number, head: string, options?: MergeOptions): Promise<MergeResult>;
   setIssue(number: number, open: boolean, comment: string): Promise<void>;
@@ -127,7 +127,7 @@ export class Gh implements GitHub {
       state: pr.merged_at ? 'MERGED' : String(pr.state).toUpperCase(), mergedAt: pr.merged_at,
       baseRefName: pr.base.ref, headRefName: pr.head.ref, baseRefOid: pr.base.sha};
   }
-  async pr(key: string, title: string, body: string, head: string, base: string): Promise<PullRequest> {
+  async pr(key: string, title: string, body: string, head: string, base: string, metadata?: {labels: string[]; assignSelf: boolean}): Promise<PullRequest> {
     const marker = `<!-- easy-skills:${key} -->`;
     for (let page = 1; ; page++) {
       const prs = await this.api<any[]>(`pulls?state=all&head=${encodeURIComponent(this.repository.split('/')[0] + ':' + head)}&base=${encodeURIComponent(base)}&per_page=100&page=${page}`);
@@ -135,11 +135,27 @@ export class Gh implements GitHub {
       if (match) {
         if (match.state !== 'open' || match.merged_at) throw new Error('Existing task PR is closed or merged; reconcile before publishing');
         // Refresh the same PR after feedback; the stable marker also recovers PATCH interruptions.
-        return this.fromApi(await this.api(`pulls/${match.number}`, 'PATCH', {title: redact(title), body: `${redact(body)}\n\n${marker}`}));
+        const updated = this.fromApi(await this.api(`pulls/${match.number}`, 'PATCH', {title: redact(title), body: `${redact(body)}\n\n${marker}`}));
+        await this.decorate(updated.number, metadata);
+        return updated;
       }
       if (prs.length < 100) break;
     }
-    return this.fromApi(await this.api('pulls', 'POST', {title: redact(title), body: `${redact(body)}\n\n${marker}`, head, base, draft: false}));
+    const created = this.fromApi(await this.api('pulls', 'POST', {title: redact(title), body: `${redact(body)}\n\n${marker}`, head, base, draft: false}));
+    await this.decorate(created.number, metadata);
+    return created;
+  }
+  /** Existing repository labels that match, and the signed-in account as assignee, the way task Issues are published. */
+  private async decorate(number: number, metadata?: {labels: string[]; assignSelf: boolean}) {
+    if (!metadata) return;
+    const labels: string[] = [];
+    for (let page = 1; ; page++) {
+      const available = await this.api<{name: string}[]>(`labels?per_page=100&page=${page}`);
+      labels.push(...available.filter(label => metadata.labels.some(wanted => wanted.toLowerCase() === label.name.toLowerCase())).map(label => label.name));
+      if (available.length < 100) break;
+    }
+    if (labels.length) await this.api(`issues/${number}/labels`, 'POST', {labels});
+    if (metadata.assignSelf) await this.api(`issues/${number}/assignees`, 'POST', {assignees: [(await this.request<{login: string}>(['api', '--hostname', 'github.com', 'user'])).login]});
   }
   async viewPr(number: number) {return this.fromApi(await this.api(`pulls/${number}`));}
   async observeMerge(number: number, head: string, operationId: string): Promise<MergeResult> {

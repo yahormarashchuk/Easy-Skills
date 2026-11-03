@@ -30,3 +30,23 @@ test('PR revision patches the existing marked PR and refuses closed delivery wit
   await assert.rejects(gh.pr('run:final', 'Updated task', 'Updated evidence', 'codex/issue-909', 'main'), /closed or merged/);
   assert.deepEqual(methods, ['GET', 'PATCH', 'GET']);
 });
+
+test('a PR receives only existing matching labels and the signed-in account as assignee', async () => {
+  const calls: {path: string; method: string; body?: unknown}[] = [];
+  const gh = new Gh('test/example', '.', async (command, options) => {
+    const path = (command.args[3] || '').replace('repos/test/example/', ''), method = command.args[command.args.indexOf('--method') + 1] || 'GET';
+    calls.push({path, method, body: options.input ? JSON.parse(options.input) : undefined});
+    let value: unknown = {};
+    if (path.startsWith('pulls?')) value = [];
+    else if (path === 'pulls') value = {number: 7, html_url: 'https://github.com/test/example/pull/7', head: {sha: 'a'.repeat(40), ref: 'h'}, base: {sha: 'b'.repeat(40), ref: 'main'}, state: 'open', merged_at: null};
+    else if (path.startsWith('labels?')) value = [{name: 'Blazor'}, {name: 'Studio'}, {name: 'Unrelated'}];
+    else if (command.args.includes('user')) value = {login: 'fixture-owner'};
+    return {code: 0, stdout: JSON.stringify(value), stderr: '', truncated: false, timedOut: false};
+  });
+  assert.equal((await gh.pr('run:final', 'Title', 'Body', 'h', 'main', {labels: ['blazor', 'studio', 'missing'], assignSelf: true})).number, 7);
+  assert.deepEqual(calls.find(c => c.path === 'issues/7/labels')?.body, {labels: ['Blazor', 'Studio']});
+  assert.deepEqual(calls.find(c => c.path === 'issues/7/assignees')?.body, {assignees: ['fixture-owner']});
+  calls.length = 0;
+  await gh.pr('run:final', 'Title', 'Body', 'h', 'main');
+  assert.ok(!calls.some(c => c.path.includes('labels') || c.path.includes('assignees')), 'no metadata, no extra requests');
+});

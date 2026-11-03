@@ -20,7 +20,8 @@ import { loadProject } from '../cli/project.js';
 import { CodeFailure, startRepair, pendingRepair, completeRepair, repairKey, type Repair } from './repairs.js';
 import { ownerAlive, processIdentity } from '../process-identity.js';
 import { ignoredOutputs } from './setup-outputs.js';
-import { publishRepairIssue, repairIssues, deliveryIssues, issueLabels, closeRepairIssues, allRepairs } from './issue-history.js';
+import { publishRepairIssue, repairIssues, issueLabels, closeRepairIssues, allRepairs } from './issue-history.js';
+import { pullRequestBody, pullRequestTitle } from './pull-request.js';
 
 class Blocked extends Error {}
 /** Generated files whose full diff is too large to review line by line. */
@@ -797,8 +798,9 @@ export class Engine {
         if (run.plan.workflow && (!run.plan.workflow.permissions.pushBranch || !run.plan.workflow.permissions.createPullRequest))
           throw new Blocked('The approved task does not authorize branch push and PR creation');
         await git.push(run.branch, cwd);
-        run.finalPr = await github.pr(`${run.id}:final`, run.plan.title,
-          `${run.plan.spec}\n\n${run.plan.workflow?.issueHistory ? deliveryIssues(this.store, run) : run.parentIssue ? `Implements #${run.parentIssue}; stays open until final merge.` : 'Local task; no Issue created.'}\n\nVerified revision: ${head}\n\n${run.finalEvidence.map(e => '- ' + e.checkId + ': passed').join('\n')}\n\nFinal review: ${run.finalReviewHead}\nFinal merge: manual.`, run.branch, run.plan.project.mainBranch);
+        const change = (await execute({command: 'git', args: ['diff', '--shortstat', `origin/${run.plan.project.mainBranch}`, 'HEAD']}, {cwd, role: 'git'})).stdout.trim();
+        run.finalPr = await github.pr(`${run.id}:final`, pullRequestTitle(run), pullRequestBody(this.store, run, head, change), run.branch, run.plan.project.mainBranch,
+          run.plan.workflow?.issueHistory ? {labels: issueLabels(run, false), assignSelf: true} : undefined);
         if (run.finalPr.headRefOid !== head || run.finalPr.baseRefName !== run.plan.project.mainBranch || run.finalPr.headRefName !== run.branch || run.finalPr.state !== 'OPEN')
           throw new Blocked('Final PR identity or head changed');
         if (run.plan.workflow?.issueHistory) for (const issue of [run.parentIssue, ...repairIssues(this.store, run)]) {

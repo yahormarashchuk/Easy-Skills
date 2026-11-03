@@ -801,3 +801,23 @@ test('REVIEW tells the reviewer to judge only the given file and stops a round o
     assert.ok(reviewCalls < 12 + 12, 'the first round stops early');
   } finally {await f.dispose();}
 });
+
+test('the final PR describes what was delivered and verified, with the planning specification last', async () => {
+  const f = await setup();
+  try {
+    const plan = await f.wizard.proposal(f.root, '909', f.profile), run = await f.wizard.approve(f.root, plan);
+    let captured: {title: string; body: string; metadata: unknown} | undefined;
+    const original = f.github.pr.bind(f.github);
+    f.github.pr = async (key: string, title: string, body: string, head: string, base: string, metadata?: {labels: string[]; assignSelf: boolean}) => {
+      captured = {title, body, metadata}; return original(key, title, body, head, base);
+    };
+    assert.equal((await f.engine.run(run.id)).status, 'ready');
+    const body = captured!.body;
+    const order = ['## Summary', '## Delivered (acceptance criteria)', '## Verification', '## Issues', '<details><summary>Approved task specification</summary>'].map(heading => body.indexOf(heading));
+    assert.ok(order.every((position, i) => position >= 0 && (i === 0 || position > order[i - 1]!)), 'sections appear in this order');
+    assert.match(body, /- acceptance: passed/); assert.match(body, /Final merge: manual/);
+    assert.match(body, /Change: \d+ files? changed/);
+    assert.ok(body.startsWith('## Summary'), 'the specification does not open the description');
+    assert.deepEqual((captured!.metadata as {assignSelf: boolean}).assignSelf, true);
+  } finally {await f.dispose();}
+});
