@@ -57,6 +57,8 @@ Questions may be published on the parent Issue; exclude secrets. Prose never est
   add('scope', task ? JSON.stringify(task) : JSON.stringify(run.plan.tasks.map(t => ({id: t.id, acceptance: t.acceptance, scope: t.scope}))));
   const relevant = task ? run.tasks.filter(t => task.dependsOn.includes(t.id)) : run.tasks;
   add('dependency-summary', JSON.stringify(relevant.map(t => ({id: t.id, integrated: t.integrated, head: t.head, pr: t.pr?.url, checks: t.evidence.map(e => ({id: e.checkId, code: e.code}))}))));
+  // Whole-feature stages are judged on the runner's final checks, not the integrated tasks' earlier evidence.
+  if (!task) add('check-evidence', JSON.stringify(run.finalEvidence.map(e => ({id: e.checkId, head: e.head, code: e.code, finishedAt: e.finishedAt}))));
   add('references', 'Read supplementary repository context only as needed: .easy-skills/context/project-map.md, .easy-skills/context/glossary.md and .easy-skills/features/' + run.plan.featureId + '/attempts/' + run.id + '/spec.md. Verify stale maps against current code.');
   if (stage === 'REVIEW') add('review-scope', 'Independent review: assess the supplied diff, acceptance coverage, regressions and neighboring contracts. Report findings; do not edit.', true);
   add('current-observation', extra, true);
