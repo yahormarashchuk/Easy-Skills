@@ -188,7 +188,10 @@ current stage, keeping a pending repair and its uncommitted work. Approved check
 be added, never removed or changed; the repository identity cannot change. The task
 must be stopped for a decision or paused, with no live client. Completed repairs stop
 counting against the repair limit because the owner approved a new plan; the previous
-plan and repair history are kept. A check that needs an environment variable receives
+plan and repair history are kept. A task that reached its repair limit can continue
+only through the owner: `easy-skills adopt-config <task> --extra-repairs N` (1-5) raises
+the limit in a new plan to the attempts already made plus N, shows that change in the
+proposal and keeps the earlier attempts counting. A check that needs an environment variable receives
 it only when `execution.environment.project` in `settings.json` names it and the
 variable is set where the task is started or resumed.
 
