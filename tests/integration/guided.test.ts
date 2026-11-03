@@ -12,6 +12,7 @@ import { Engine } from '../../src/runner/engine.js';
 import { ClientError, type Client } from '../../src/adapters/index.js';
 import { hash } from '../../src/util.js';
 import { TerminalInteraction } from '../../src/cli/interaction.js';
+import { deliveryIssues } from '../../src/runner/issue-history.js';
 
 class UI implements Interaction {
   messages: string[] = []; questions: string[] = []; confirmations: string[] = [];
@@ -670,9 +671,10 @@ test('a task approved without Issue history publishes its task and earlier repai
     assert.equal(stopped.status, 'needs_decision'); assert.match(stopped.reason!, /repair limit reached/);
     assert.ok(![...f.github.objects.keys()].some(key => key.startsWith(run.id)), 'no Issue without the grant');
 
-    const proposal = await engine.adoptConfiguration(run.id, undefined, 1, true);
+    // A plain adoption moves earlier repairs out of the limit; they must still be published and closed by the PR.
+    const proposal = await engine.adoptConfiguration(run.id, undefined, 0, true);
     assert.deepEqual(proposal.issueHistory, {from: false, to: true, repairs: 3});
-    await engine.adoptConfiguration(run.id, proposal.hash, 1, true);
+    await engine.adoptConfiguration(run.id, proposal.hash, 0, true);
     failing = false;
     const ready = await engine.run(run.id);
     assert.equal(ready.status, 'ready', ready.reason || '');
@@ -680,6 +682,7 @@ test('a task approved without Issue history publishes its task and earlier repai
     assert.ok(keys.includes(`${run.id}:feature`));
     assert.equal(keys.filter(key => key.startsWith(`${run.id}:repair-issue:`)).length, 3);
     assert.ok(ready.parentIssue);
+    assert.equal(deliveryIssues(f.store, ready).split('\n').filter(line => line.startsWith('Fixes #')).length, 4, 'the PR closes the task Issue and all three repair Issues');
   } finally {await f.dispose();}
 });
 

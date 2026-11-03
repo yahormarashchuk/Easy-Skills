@@ -24,8 +24,15 @@ export async function publishRepairIssue(store: Store, run: Run, github: GitHub,
   store.recordOperation(key, run.id, 'github.repair.created', number);
   return number;
 }
+/** Every whole-feature repair of the run, including those an owner-approved new plan moved out of the repair limit. */
+export function allRepairs(store: Store, run: Run): Repair[] {
+  const key = repairKey(run, 'feature'), seen = new Set<string>();
+  const superseded = (store.events(run.id) as {type: string; data: string}[]).filter(event => event.type === 'plan.configuration.adopted')
+    .flatMap(event => store.operation<Repair[]>(`${key}:superseded:${JSON.parse(event.data || '{}').previous}`) || []);
+  return [...superseded, ...(store.operation<Repair[]>(key) || [])].filter(repair => !seen.has(repair.id) && !!seen.add(repair.id));
+}
 export function repairIssues(store: Store, run: Run): number[] {
-  return (store.operation<Repair[]>(repairKey(run, 'feature')) || []).map(repair =>
+  return allRepairs(store, run).map(repair =>
     store.operation<number>(`${run.id}:repair-issue:${repair.id}`)).filter((number): number is number => number !== undefined);
 }
 export function deliveryIssues(store: Store, run: Run): string {

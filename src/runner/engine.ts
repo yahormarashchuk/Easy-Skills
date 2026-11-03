@@ -20,7 +20,7 @@ import { loadProject } from '../cli/project.js';
 import { CodeFailure, startRepair, pendingRepair, completeRepair, repairKey, type Repair } from './repairs.js';
 import { ownerAlive, processIdentity } from '../process-identity.js';
 import { ignoredOutputs } from './setup-outputs.js';
-import { publishRepairIssue, repairIssues, deliveryIssues, issueLabels, closeRepairIssues } from './issue-history.js';
+import { publishRepairIssue, repairIssues, deliveryIssues, issueLabels, closeRepairIssues, allRepairs } from './issue-history.js';
 
 class Blocked extends Error {}
 export interface EngineOptions {client?: Client; github?: GitHub; signal?: AbortSignal; testRemote?: string}
@@ -287,7 +287,7 @@ export class Engine {
       this.store.save(run, 'github.parent.created');
     }
     // A task granted Issue history after repairs already happened publishes those repairs too, so GitHub shows every round.
-    if (run.plan.workflow?.issueHistory) for (const repair of this.store.operation<Repair[]>(repairKey(run, 'feature')) || [])
+    if (run.plan.workflow?.issueHistory) for (const repair of allRepairs(this.store, run))
       if (repair.state === 'completed') await publishRepairIssue(this.store, run, github, repair);
     await this.setup(run, git, run.worktree);
     if (!this.store.operation(`${run.id}:baseline`)) {
