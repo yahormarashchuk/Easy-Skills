@@ -196,6 +196,8 @@ proposal and keeps the earlier attempts counting. `--issue-history` grants a tas
 Issue history the same GitHub record as new tasks: the task Issue and one Bug Issue per
 repair, including repairs already made, titled with the stage that found the problem.
 
+Within one exact client session the runner does not repeat large sections that have not changed (approved rules, specification, scope, procedure); it names them as unchanged and still sends the short framing sections and the current observation every time. A new or replaced session receives everything.
+
 REVIEW reviews every changed file before a repair, so one corrective BUILD receives all
 findings. A file whose diff against the same base already passed review is not reviewed
 again after a repair commit. Files carried from the source checkout into the first task

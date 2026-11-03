@@ -459,7 +459,8 @@ export class Engine {
     if (stage === 'BUILD') extra += '\nAfter BUILD the runner runs every approved check outside your sandbox: ' + JSON.stringify(run.plan.project.checks.map(c => c.id)) +
       '. A build or test that cannot run in your sandbox for an environmental reason is not a reason to return blocked; finish the change, report the command and error in findings, and return passed.';
     if (stage === 'VERIFY') extra += '\nAvailable approved diagnostic commands: ' + JSON.stringify(run.plan.project.checks.filter(c => run.plan.verification?.diagnostics.includes(c.id)).map(c => ({command: c.command, args: c.args}))) + '\nAvailable browser tools: ' + JSON.stringify(run.plan.verification?.browserTools || []);
-    const assembled = assembleContext({...run, root: cwd}, stage, task, extra, skill);
+    // In the exact session the model already holds the unchanged large sections; only the short ones that frame each request are repeated.
+    const assembled = assembleContext({...run, root: cwd}, stage, task, extra, skill, previous && sessions[stage] && previous.session === sessions[stage] ? previous.manifest : undefined);
     this.store.event(run.id, 'context.assembled', {stage, task: task?.id, manifest: assembled.manifest});
     const log = join(ensureDir(join(this.store.home, 'logs', run.id)), `${task?.id || 'feature'}-${stage}-${Date.now()}.log`);
     const result = await this.client.run(run.plan.assignments[stage], assembled.prompt, {
