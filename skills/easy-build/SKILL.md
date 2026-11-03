@@ -15,3 +15,9 @@ For failures reproduce, isolate the cause, test the repair and report remaining 
 Preserve unrelated changes. Do not edit rules, check commands, permissions or runner
 state. Runner-owned commits, GitHub operations, and notifications stay with the runner.
 Return passed, blocked or failed with concrete results; do not claim missing evidence.
+
+The client sandbox can stop commands for reasons unrelated to the change, for example no
+local sockets for a test host or no package restore. When a build or test cannot run for
+such a reason, finish the change, name the command and its environment error in findings,
+and return passed: the runner then runs every approved check outside the sandbox and
+returns real failures to BUILD. Return blocked only for a decision the owner must make.

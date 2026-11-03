@@ -446,6 +446,9 @@ export class Engine {
     const inputs: string[] = carried ? JSON.parse(carried.data || '{}').carried || [] : [];
     if ((stage === 'VERIFY' || stage === 'REVIEW') && inputs.length)
       extra += '\nApproved task inputs carried from the source checkout into the first task commit; they belong to this task, update them in place and never delete them as unrelated additions: ' + JSON.stringify(inputs);
+    // Codex BUILD blocked twice on a test host that could not open a socket inside its sandbox, although the runner runs checks itself.
+    if (stage === 'BUILD') extra += '\nAfter BUILD the runner runs every approved check outside your sandbox: ' + JSON.stringify(run.plan.project.checks.map(c => c.id)) +
+      '. A build or test that cannot run in your sandbox for an environmental reason is not a reason to return blocked; finish the change, report the command and error in findings, and return passed.';
     if (stage === 'VERIFY') extra += '\nAvailable approved diagnostic commands: ' + JSON.stringify(run.plan.project.checks.filter(c => run.plan.verification?.diagnostics.includes(c.id)).map(c => ({command: c.command, args: c.args}))) + '\nAvailable browser tools: ' + JSON.stringify(run.plan.verification?.browserTools || []);
     const assembled = assembleContext({...run, root: cwd}, stage, task, extra, skill);
     this.store.event(run.id, 'context.assembled', {stage, task: task?.id, manifest: assembled.manifest});

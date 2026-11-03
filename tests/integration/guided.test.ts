@@ -701,3 +701,17 @@ test('VERIFY and REVIEW are told which carried source-checkout inputs belong to 
     assert.ok(prompts.BUILD!.every(p => !p.includes('Approved task inputs carried')));
   } finally {await f.dispose();}
 });
+
+test('BUILD is told that the runner runs the approved checks, so a sandbox that cannot run tests is not a blocker', async () => {
+  const f = await setup();
+  try {
+    const plan = await f.wizard.proposal(f.root, '909', f.profile), run = await f.wizard.approve(f.root, plan);
+    const prompts: string[] = [];
+    const engine = new Engine(f.store, {testRemote: f.remote, github: f.github, client: {...f.client, async run(a, p, o) {
+      if (o.stage === 'BUILD') prompts.push(p);
+      return f.client.run(a, p, o);
+    }}});
+    assert.equal((await engine.run(run.id)).status, 'ready');
+    assert.ok(prompts.length && prompts.every(p => /runner runs every approved check outside your sandbox: \["acceptance"\][^\n]*not a reason to return blocked/.test(p)));
+  } finally {await f.dispose();}
+});
