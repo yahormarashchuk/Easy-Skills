@@ -11,10 +11,11 @@ test('repair history publishes evidence before repair, survives retries and link
     f.run.plan.workflow = {mode: 'direct', issueHistory: true, baseHead: 'a'.repeat(40), context: {},
       permissions: {pushBranch: true, createPullRequest: true, closeIssueOnMerge: true}};
     f.run.parentIssue = 50;
-    const repair = startRepair(f.store, f.run, 'feature', 'VERIFY', 'b'.repeat(40), new CodeFailure('Snapshot requests overlap'));
+    const repair = startRepair(f.store, f.run, 'feature', 'VERIFY', 'b'.repeat(40), new CodeFailure('Snapshot requests overlap: ' + f.store.home));
     let calls = 0;
     const github = {...f.github, async issue(_key: string, title: string, body: string, metadata?: {labels: string[]; assignSelf: boolean}) {
       calls++; assert.match(title, /Snapshot requests overlap/); assert.match(body, /Trigger \/ current behavior/);
+      assert.ok(!title.includes(f.store.home)); assert.ok(!body.includes(f.store.home));
       assert.match(body, /Acceptance|acceptance/); assert.match(body, /Parent: #50/);
       assert.match(body, /b{40}/); assert.equal(metadata?.assignSelf, true); assert.ok(metadata?.labels.includes('bug'));
       return 51;

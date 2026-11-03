@@ -12,7 +12,7 @@ import { alive, ensureDir, hash, message, now, redact, rulesHash, rejectSymlinkP
 import { assembleContext, type ContextManifest } from './context.js';
 import { recordFailure, confirmedProgress } from './failures.js';
 import { requireCompatibility } from './compatibility.js';
-import { CheckFailure, failureBundle } from './check-failure.js';
+import { CheckFailure, failureBundle, cleanExcerpt } from './check-failure.js';
 import { requireAgreement } from './onboarding.js';
 import { assertProtected } from './protected-inputs.js';
 import { CodeFailure, startRepair, pendingRepair, completeRepair, repairKey, type Repair } from './repairs.js';
@@ -638,7 +638,7 @@ export class Engine {
         const repair = pendingRepair(this.store, run, 'feature');
         if (!repair) throw new Blocked('Persisted repair cursor has no matching intent');
         const issue = await publishRepairIssue(this.store, run, github, repair);
-        if (issue && run.parentIssue) await github.commentOnce(run.parentIssue, `repair:${repair.id}`, `Repair required: #${issue}\n\n${repair.reason}`);
+        if (issue && run.parentIssue) await github.commentOnce(run.parentIssue, `repair:${repair.id}`, `Repair required: #${issue}\n\n${cleanExcerpt(repair.reason, this.store.home)}`);
         await this.build(run, git, cwd, undefined, undefined, repair.id, `Repair whole-feature failure ${JSON.stringify(repair)}. Preserve all integrated tasks.`);
         if (issue) await github.commentOnce(issue, `implemented:${repair.id}`, `Corrective BUILD completed at ${await git.head(cwd)}. Independent checks, VERIFY and REVIEW are pending.`);
         this.store.transaction(() => {
