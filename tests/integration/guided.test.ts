@@ -597,7 +597,9 @@ test('a task stopped for a decision adopts approved added checks and keeps its b
 test('a task that used its repair attempts continues only when the owner raises the limit in a new plan', async () => {
   const f = await setup();
   try {
-    const plan = await f.wizard.proposal(f.root, '909', f.profile), run = await f.wizard.approve(f.root, plan);
+    // The default budget is generous; this test needs it small to reach the limit quickly.
+    const plan = structuredClone(await f.wizard.proposal(f.root, '909', f.profile)); plan.repairPolicy = {maxCompletedAttempts: 3};
+    const run = await f.wizard.approve(f.root, plan);
     let failing = true, rounds = 0;
     // Distinct failures, so the identical-failure stop cannot end the run before the repair limit does.
     const engine = new Engine(f.store, {testRemote: f.remote, github: f.github, client: {...f.client, async run(a, p, o) {
@@ -660,7 +662,7 @@ test('a task approved without Issue history publishes its task and earlier repai
   const f = await setup();
   try {
     const proposed = await f.wizard.proposal(f.root, 'Normalize names', f.profile);
-    const plan = structuredClone(proposed); delete plan.workflow!.issueHistory;
+    const plan = structuredClone(proposed); delete plan.workflow!.issueHistory; plan.repairPolicy = {maxCompletedAttempts: 3};
     const run = await f.wizard.approve(f.root, plan);
     let failing = true, rounds = 0;
     const engine = new Engine(f.store, {testRemote: f.remote, github: f.github, client: {...f.client, async run(a, p, o) {
@@ -713,5 +715,15 @@ test('BUILD is told that the runner runs the approved checks, so a sandbox that 
     }}});
     assert.equal((await engine.run(run.id)).status, 'ready');
     assert.ok(prompts.length && prompts.every(p => /runner runs every approved check outside your sandbox: \["acceptance"\][^\n]*not a reason to return blocked/.test(p)));
+  } finally {await f.dispose();}
+});
+
+test('a new plan approves a repair budget of ten attempts unless told otherwise', async () => {
+  const f = await setup();
+  try {
+    const plan = await f.wizard.proposal(f.root, '909', f.profile);
+    assert.equal(plan.repairPolicy?.maxCompletedAttempts, 10);
+    await f.wizard.approve(f.root, plan);
+    assert.match(f.ui.messages.join('\n'), /Repair limit: 10 completed corrective attempts/);
   } finally {await f.dispose();}
 });

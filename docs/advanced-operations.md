@@ -116,8 +116,9 @@ execution policy requires a reviewed probe; expired
 authentication requires official login. Unknown quota reset times use capped backoff.
 Three unresolved occurrences of the same normalized failure stop repairs even when
 each attempt makes a new commit. A new revision alone is not progress.
-New plans also approve an overall repair limit (three completed corrective BUILD
-attempts by default). Quota/network interruptions retain the same repair ID and
+New plans also approve an overall repair limit (ten completed corrective BUILD
+attempts by default, shown in the plan approval; three proved too few on a real task
+whose every round fixed genuine findings). Quota/network interruptions retain the same repair ID and
 session. Legacy approvals are never silently assigned this new condition.
 
 `baseline --recapture`, `setup-reset`, `retry-merge` and `project-config` use concrete

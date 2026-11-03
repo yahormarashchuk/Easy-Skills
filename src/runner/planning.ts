@@ -12,11 +12,13 @@ import { requireAgreement } from './onboarding.js';
 import { protectedManifest } from './protected-inputs.js';
 import { ownerAlive, processIdentity } from '../process-identity.js';
 
+/** Corrective BUILD attempts a task may use in total, approved once with the plan. Three proved too few on a real task whose rounds each fixed genuine findings. */
+export const DEFAULT_REPAIR_ATTEMPTS = 10;
 export const FeatureRequest = z.object({featureId: Identifier, title: z.string().min(1), spec: z.string().min(1),
   assignments: Assignments, permissions: z.object({publishIssues: z.boolean(), mergeIntermediate: z.boolean()}).strict(),
   verification: z.object({diagnostics: z.array(Identifier), browserTools: z.array(z.string().regex(/^mcp__[\w-]+__[\w-]+$/))}).strict().optional(),
   workflow: DirectWorkflow.optional(),
-  repairPolicy: z.object({maxCompletedAttempts: z.number().int().min(0).max(100)}).strict().default({maxCompletedAttempts: 3})}).strict();
+  repairPolicy: z.object({maxCompletedAttempts: z.number().int().min(0).max(100)}).strict().default({maxCompletedAttempts: DEFAULT_REPAIR_ATTEMPTS})}).strict();
 /** Read-only planning uses the assigned PLAN model, before approval or publication. */
 export async function generatePlan(store: Store, root: string, input: unknown, client: Client = new CliClient(), previous?: {worktree: string; plan: Plan; head: string}, cacheDraft = false, onLine?: (line: string) => void) {
   const request = FeatureRequest.parse(input), project = loadProject(root), identity = await new Git(root).identity();
