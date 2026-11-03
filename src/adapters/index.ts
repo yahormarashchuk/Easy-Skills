@@ -52,15 +52,20 @@ export function invocation(assignment: Assignment, session?: string, mode: 'read
   if (mode === 'read') args.push('--tools', ['Read', 'Glob', 'Grep', ...(diagnostics.length ? ['Bash'] : []), ...browser].join(','));
   return {command: 'claude', args};
 }
+const QUOTA_MESSAGE = /out of credits|credit balance is too low|spend(?:ing)? limit|usage limit|rate limit|quota (?:exceeded|exhausted)|hit your (?:org'?s )?(?:monthly |session |usage )?limit/i;
 export interface ClientEvent {session?: string; result?: StageResult; invalid?: string; complete?: boolean; error?: string; kind?: ErrorKind; fatal?: boolean; models?: string[]; retryAt?: string}
 function structuredError(event: Record<string, any>): Pick<ClientEvent, 'error' | 'kind' | 'retryAt'> {
   const detail = event.error || event;
   const code = detail.code || event.api_error || event.error_code || detail.type;
   const status = detail.status || detail.status_code || event.api_error_status;
+  const error = detail.message || event.message?.content?.find?.((item: {type: string; text?: string}) => item.type === 'text')?.text || event.message || 'Client request failed';
   const kind: ErrorKind | undefined = status === 429 || ['rate_limit_exceeded', 'insufficient_quota', 'usage_limit_reached'].includes(code) ? 'quota'
     : status === 401 || ['authentication_error', 'unauthorized'].includes(code) ? 'auth'
-    : [500, 502, 503, 504].includes(status) || ['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND'].includes(code) ? 'network' : undefined;
-  return {error: detail.message || event.message?.content?.find?.((item: {type: string; text?: string}) => item.type === 'text')?.text || event.message || 'Client request failed', kind, retryAt: resetTime(event)};
+    : [500, 502, 503, 504].includes(status) || ['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND'].includes(code) ? 'network'
+    // Some account limits arrive as a provider error event with prose only. Matching it here, never on stage output or
+    // check logs, lets the run wait and retry instead of asking the owner to decide.
+    : typeof error === 'string' && QUOTA_MESSAGE.test(error) ? 'quota' : undefined;
+  return {error, kind, retryAt: resetTime(event)};
 }
 function resetTime(event: Record<string, any>): string | undefined {
   const error = event.api_error_params?.rate_limit_info || event.error || event.rate_limit_info || event;

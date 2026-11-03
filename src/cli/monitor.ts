@@ -5,8 +5,11 @@ import { stageBanner } from './presentation.js';
 interface Output {write(text: string): unknown; columns?: number; rows?: number}
 export interface Style {color: boolean; unicode: boolean}
 
-/** A followed run stops being watched here: it finished, or it waits for the owner. Waiting states resume by themselves. */
-const settled: Status[] = ['draft', 'ready', 'merged', 'abandoned', 'stopped', 'needs_decision', 'paused'];
+/**
+ * A followed run stops being watched only once nothing can change it any more. A run waiting for the owner stays on
+ * screen with the command that continues it: closing the view there looked like the terminal quitting by itself.
+ */
+const settled: Status[] = ['draft', 'merged', 'abandoned', 'stopped'];
 const attention: Status[] = ['needs_decision', 'paused'];
 const finished: Status[] = ['merged', 'abandoned'];
 const RECENT = 8;
@@ -18,7 +21,23 @@ export const reference = (run: Run) => run.plan.workflow?.issue ? '#' + run.plan
 export function summary(run: Run, style: Style) {
   return `${run.plan.workflow?.issue ? 'Task #' + run.plan.workflow.issue : run.plan.title}: ${run.status}\n` +
     (run.status === 'ready' ? `Ready for review: ${run.finalPr?.url}\nChecks: passed at ${run.finalReviewHead}\nReview: passed. Final merge: manual.` : stageBanner(stageOf(run), 'current', style.color, style.unicode)) +
-    (run.reason ? '\n' + run.reason : '') + (run.pendingDecision ? '\nDecision: ' + run.pendingDecision.question : '');
+    (run.reason ? '\n' + run.reason : '') + (run.pendingDecision ? '\nDecision: ' + run.pendingDecision.question : '') +
+    (nextStep(run) ? '\n\n' + (attention.includes(run.status) ? '>>> YOUR ACTION: ' : 'Next: ') + nextStep(run) : '');
+}
+
+/** The one command that moves a run forward, or what it waits for; undefined while it works by itself. */
+export function nextStep(run: Run): string | undefined {
+  const ref = reference(run);
+  if (run.status === 'needs_decision') {
+    if (run.pendingDecision && !run.pendingDecision.answer) return `easy-skills answer ${run.id} --request ${run.pendingDecision.id} --value "your answer"`;
+    if (/repair limit reached/i.test(run.reason || '')) return `easy-skills adopt-config ${ref} --extra-repairs 2  (allows two more repair attempts)`;
+    return `resolve the reason above, then easy-skills resume ${ref}`;
+  }
+  if (run.status === 'paused') return `easy-skills resume ${ref}`;
+  if (['waiting_quota', 'waiting_external', 'waiting_resource'].includes(run.status))
+    return 'nothing; it retries by itself' + (run.retryAt ? ' at ' + new Date(run.retryAt).toLocaleTimeString() : '');
+  if (run.status === 'ready') return 'review and merge the pull request yourself; Easy Skills never merges it';
+  return undefined;
 }
 
 export function ago(time: string, now = Date.now()) {
@@ -86,7 +105,7 @@ const visible = (line: string) => line.replace(/\u001b\[[0-9;]*m/g, '').length;
 export interface WatchOptions {style: Style; out?: Output; intervalMs?: number; signal?: AbortSignal; now?: () => number}
 
 /**
- * Follows one run until it finishes or waits for the owner. Ctrl+C only stops watching: the detached worker owns the run,
+ * Follows one run until it finishes for good, also while it waits for the owner. Ctrl+C only stops watching: the detached worker owns the run,
  * so closing this terminal never stops it.
  */
 export async function watchRun(store: Store, id: string, options: WatchOptions): Promise<Run> {
@@ -98,7 +117,7 @@ export async function watchRun(store: Store, id: string, options: WatchOptions):
   });
 }
 
-/** Follows every task of the repository until Ctrl+C, or until none of them is still working. */
+/** Follows every task of the repository until Ctrl+C, or until all of them have finished for good. */
 export async function watchTasks(store: Store, root: string, options: WatchOptions): Promise<Run[]> {
   return follow(options, () => {
     const runs = store.list().filter(run => run.root === root && !finished.includes(run.status));

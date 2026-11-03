@@ -133,7 +133,7 @@ program.command('revise <task> <feedback>').description('Review a revised plan a
   .option('--answers <json>').option('--non-interactive').option('--foreground')
   .action(async (task, feedback, opts) => guided(opts, async (wizard, store, ui) => {
     const previous = resolveRun(store, cwd(), task);
-    if (previous.status !== 'ready' || !previous.plan.workflow) throw new Error('Feedback requires a ready direct task; use resume for interrupted work');
+    if (previous.status !== 'ready' || !previous.plan.workflow) throw new Error('revise changes a task whose pull request is ready. For a stopped task use easy-skills resume, or easy-skills adopt-config to add checks, raise the repair limit or publish Issue history');
     const profile = await wizard.profile(cwd()); await wizard.compatibility(cwd(), profile);
     const plan = await wizard.proposal(cwd(), feedback, profile, previous), run = await wizard.approve(cwd(), plan, previous);
     if (opts.foreground) {ui.say(summary(await new Engine(store).run(run.id))); return;}
@@ -142,18 +142,21 @@ program.command('revise <task> <feedback>').description('Review a revised plan a
   }).then(id => id && live(opts) ? follow(id) : undefined));
 program.command('adopt-config <task>').description('Apply the approved project configuration (for example new checks) to a task stopped for a decision, keeping its branch and code')
   .option('--extra-repairs <n>', 'Also allow this many more repair attempts than already made (1-5), for a task that reached its repair limit')
+  .option('--issue-history', 'Publish this task and its repairs as GitHub Issues (for tasks approved before Issue history existed)')
   .option('--apply-hash <hash>', 'Apply the reviewed proposal without a prompt').option('--answers <json>').option('--non-interactive')
   .action(async (task, opts) => guided(opts, async (_wizard, store, ui) => {
     const engine = new Engine(store), id = resolveRun(store, cwd(), task).id, extra = opts.extraRepairs === undefined ? 0 : Number(opts.extraRepairs);
-    const proposal = await engine.adoptConfiguration(id, opts.applyHash, extra);
+    const issues = !!opts.issueHistory;
+    const proposal = await engine.adoptConfiguration(id, opts.applyHash, extra, issues);
     if (!opts.applyHash) {
       ui.say(`Task ${store.get(id).plan.featureId} keeps its branch, commits and current stage (${proposal.phase}).\n` +
         (proposal.addedChecks.length ? 'It runs these added checks from now on:\n' + proposal.addedChecks.map(c => `- ${c.id}: ${[c.command, ...c.args].join(' ')}`).join('\n') + '\n' : 'No checks are added.\n') +
         `Setup commands ${proposal.setupChanged ? 'changed and run again' : 'unchanged'}. Rules revision: ${proposal.rulesAgreement?.version}. ` +
         (extra ? `Repair limit raised from ${proposal.repairLimit.from} to ${proposal.repairLimit.to} completed attempts (${proposal.repairLimit.completed} already made); earlier attempts keep counting.`
-          : 'Completed repairs no longer count against the repair limit.'));
+          : 'Completed repairs no longer count against the repair limit.') +
+        (issues && !proposal.issueHistory.from ? `\nGitHub: create the task Issue and ${proposal.issueHistory.repairs} repair Issue(s) as the signed-in account with matching labels; the delivery PR closes them on merge.` : ''));
       if (!await ui.confirm('config:adopt', 'Continue this task with the approved project configuration?', proposal.hash)) throw new Error('The configuration was not adopted; the task is unchanged');
-      await engine.adoptConfiguration(id, proposal.hash, extra);
+      await engine.adoptConfiguration(id, proposal.hash, extra, issues);
     }
     await start(store, id);
     ui.say(`Configuration adopted. Use easy-skills status ${store.get(id).plan.featureId} to follow progress.`);

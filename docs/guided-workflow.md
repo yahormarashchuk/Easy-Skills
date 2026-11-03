@@ -144,7 +144,8 @@ exact ID (`codex` or `claude-code`) and fail clearly when invalid or unavailable
 Stage banners show each model-setup position and explain its responsibility. DEFINE
 and PLAN are marked during the guided conversation; `easy-skills status` follows
 the current execution stage live, redrawn in place every two seconds, until the task
-is ready or waits for the owner. `run` and `revise` continue into the same view after
+is merged, abandoned or stopped. While it waits for the owner the view stays open and
+ends with `>>> YOUR ACTION:` and the exact command that continues it. `run` and `revise` continue into the same view after
 approval. Watching never owns the work: Ctrl+C or a closed window leaves the detached
 worker running. `easy-skills show ids` lists every task with the ID `status`, `watch`
 and `resume` accept; `status` without an ID shows all open tasks as one live table. Color is used only in a supported interactive terminal
@@ -191,7 +192,14 @@ counting against the repair limit because the owner approved a new plan; the pre
 plan and repair history are kept. A task that reached its repair limit can continue
 only through the owner: `easy-skills adopt-config <task> --extra-repairs N` (1-5) raises
 the limit in a new plan to the attempts already made plus N, shows that change in the
-proposal and keeps the earlier attempts counting. A check that needs an environment variable receives
+proposal and keeps the earlier attempts counting. `--issue-history` grants a task approved before
+Issue history the same GitHub record as new tasks: the task Issue and one Bug Issue per
+repair, including repairs already made, titled with the stage that found the problem.
+
+REVIEW reviews every changed file before a repair, so one corrective BUILD receives all
+findings. A file whose diff against the same base already passed review is not reviewed
+again after a repair commit. Files carried from the source checkout into the first task
+commit are named to VERIFY and REVIEW as task inputs, never as unrelated additions. A check that needs an environment variable receives
 it only when `execution.environment.project` in `settings.json` names it and the
 variable is set where the task is started or resumed.
 

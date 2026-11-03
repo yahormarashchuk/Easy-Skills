@@ -116,7 +116,8 @@ test('R4: changing REVIEW prose and commits cannot reset the approved total repa
     }}});
     const run = await engine.run(f.run.id);
     assert.equal(run.status, 'needs_decision'); assert.match(run.reason!, /repair limit/);
-    assert.equal(builds, 4); assert.equal(reviews, 4);
+    // Each round reviews both changed files before its repair: four rounds of two files.
+    assert.equal(builds, 4); assert.equal(reviews, 8);
     const history = f.store.operation<Repair[]>(repairKey(run, 'task:one'))!;
     assert.equal(history.filter(r => r.state === 'completed').length, 3);
     assert.equal(new Set(history.map(r => r.id)).size, 3);
@@ -202,5 +203,17 @@ test('R15: explicit baseline recapture preserves history and abandoned replaceme
     const replacement = f.store.create(f.run.root, f.run.commonDir, f.run.plan);
     assert.notEqual(replacement.branch, blocked.branch); assert.equal(replacement.approvedHash, undefined);
     assert.equal(replacement.tasks[0]!.worktree, undefined); assert.ok(existsSync(blocked.worktree!));
+  } finally {await f.dispose();}
+});
+
+test('a paused task can be abandoned while its idle worker still holds the worker lock', async () => {
+  const f = await fixture();
+  try {
+    const run = f.engine.approve(f.run.id, f.run.planHash); run.status = 'paused'; f.store.save(run, 'fixture.paused');
+    const worker = f.store.acquire('worker:' + run.id);
+    try {
+      assert.equal((await f.engine.abandon(run.id)).status, 'abandoned');
+      await assert.rejects(f.engine.run(run.id), /cannot execute/);
+    } finally {f.store.release('worker:' + run.id, worker);}
   } finally {await f.dispose();}
 });
