@@ -358,6 +358,8 @@ test('unapproved text-task drafts keep their exact identity and plan across a re
     const approved = await f.wizard.approve(f.root, second), ready = await f.engine.run(approved.id);
     assert.equal(ready.status, 'ready', ready.reason || ''); assert.ok(ready.parentIssue);
     assert.equal(f.github.objects.size, 2); assert.equal(f.github.prs.size, 1);
+    assert.throws(() => f.store.create(ready.root, ready.commonDir, {...second, featureId: 'duplicate-generated-issue', workflow: {...second.workflow!, issue: ready.parentIssue}}), /already uses this Issue/);
+    assert.equal(resolveRun(f.store, f.root, String(ready.parentIssue)).id, ready.id);
     assert.equal(resolveRun(f.store, f.root, 'latest').id, ready.id);
     assert.equal(resolveRun(f.store, f.root, ready.plan.title).id, ready.id);
   } finally {await f.dispose();}
