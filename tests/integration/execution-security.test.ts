@@ -9,6 +9,7 @@ import { restrictCodex, classify } from '../../src/adapters/index.js';
 import { Gh } from '../../src/github/index.js';
 import { githubRepository } from '../../src/git/remotes.js';
 import { fixture } from '../helpers.js';
+import { LocalSettings } from '../../src/notifications/index.js';
 
 test('R1: runner tools ignore a planted cwd launcher and poisoned PATH', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'easy trusted fixture ')), old = process.env.PATH, previous = process.cwd();
@@ -134,4 +135,10 @@ test('project commands keep standard Windows locations and never reuse MSBuild n
   assert.equal(project.MSBUILDDISABLENODEREUSE, '1');
   assert.equal(project.PYTHONDONTWRITEBYTECODE, '1');
   assert.equal(childEnvironment('git', source).MSBUILDDISABLENODEREUSE, undefined);
+});
+
+test('settings may grant environment variables to only some process roles', () => {
+  const parsed = LocalSettings.parse({execution: {environment: {project: ['CHECK_DATABASE_URL']}}});
+  assert.deepEqual(parsed.execution?.environment, {project: ['CHECK_DATABASE_URL']});
+  assert.throws(() => LocalSettings.parse({execution: {environment: {unknown: ['X']}}}));
 });

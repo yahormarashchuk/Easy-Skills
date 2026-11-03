@@ -12,7 +12,7 @@ export const LocalSettings = z.object({
     from: z.email(), to: z.email()}).strict().optional(),
   remote: z.object({allowedAuthors: z.array(z.string().min(1)).min(1)}).strict().optional(),
   execution: z.object({tools: z.record(z.string(), z.string()).optional(),
-    environment: z.record(z.enum(['git', 'github', 'client', 'mcp', 'project', 'notification', 'supervisor', 'tool']), z.array(z.string())).optional()}).strict().optional(),
+    environment: z.partialRecord(z.enum(['git', 'github', 'client', 'mcp', 'project', 'notification', 'supervisor', 'tool']), z.array(z.string())).optional()}).strict().optional(),
 }).strict();
 export type LocalSettings = z.infer<typeof LocalSettings>;
 export function settings(store: Store): LocalSettings {
