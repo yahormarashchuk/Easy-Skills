@@ -132,7 +132,7 @@ export class Engine {
         addedChecks: project.checks.filter(check => !previous.checks.some(c => hash(c) === hash(check))),
         setupChanged: hash(project.setup || []) !== hash(previous.setup || []), phase: run.finalPhase};
       const digest = hash(proposal);
-      if (!approvedHash) return {...proposal, hash: digest};
+      if (!approvedHash) return {...proposal, hash: digest, status: run.status};
       if (approvedHash !== digest) throw new Error('The configuration proposal changed; review it again');
       const changedInputs = Object.keys({...run.plan.protectedInputs, ...plan.protectedInputs})
         .filter(path => run.plan.protectedInputs?.[path] !== plan.protectedInputs?.[path]);
