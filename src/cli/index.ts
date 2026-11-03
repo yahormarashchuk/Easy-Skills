@@ -141,16 +141,19 @@ program.command('revise <task> <feedback>').description('Review a revised plan a
     return run.id;
   }).then(id => id && live(opts) ? follow(id) : undefined));
 program.command('adopt-config <task>').description('Apply the approved project configuration (for example new checks) to a task stopped for a decision, keeping its branch and code')
+  .option('--extra-repairs <n>', 'Also allow this many more repair attempts than already made (1-5), for a task that reached its repair limit')
   .option('--apply-hash <hash>', 'Apply the reviewed proposal without a prompt').option('--answers <json>').option('--non-interactive')
   .action(async (task, opts) => guided(opts, async (_wizard, store, ui) => {
-    const engine = new Engine(store), id = resolveRun(store, cwd(), task).id;
-    const proposal = await engine.adoptConfiguration(id, opts.applyHash);
+    const engine = new Engine(store), id = resolveRun(store, cwd(), task).id, extra = opts.extraRepairs === undefined ? 0 : Number(opts.extraRepairs);
+    const proposal = await engine.adoptConfiguration(id, opts.applyHash, extra);
     if (!opts.applyHash) {
-      ui.say(`Task ${store.get(id).plan.featureId} keeps its branch, commits and current stage (${proposal.phase}) and runs these added checks from now on:\n` +
-        proposal.addedChecks.map(c => `- ${c.id}: ${[c.command, ...c.args].join(' ')}`).join('\n') +
-        `\nSetup commands ${proposal.setupChanged ? 'changed and run again' : 'unchanged'}. Rules revision: ${proposal.rulesAgreement?.version}. Completed repairs no longer count against the repair limit.`);
+      ui.say(`Task ${store.get(id).plan.featureId} keeps its branch, commits and current stage (${proposal.phase}).\n` +
+        (proposal.addedChecks.length ? 'It runs these added checks from now on:\n' + proposal.addedChecks.map(c => `- ${c.id}: ${[c.command, ...c.args].join(' ')}`).join('\n') + '\n' : 'No checks are added.\n') +
+        `Setup commands ${proposal.setupChanged ? 'changed and run again' : 'unchanged'}. Rules revision: ${proposal.rulesAgreement?.version}. ` +
+        (extra ? `Repair limit raised from ${proposal.repairLimit.from} to ${proposal.repairLimit.to} completed attempts (${proposal.repairLimit.completed} already made); earlier attempts keep counting.`
+          : 'Completed repairs no longer count against the repair limit.'));
       if (!await ui.confirm('config:adopt', 'Continue this task with the approved project configuration?', proposal.hash)) throw new Error('The configuration was not adopted; the task is unchanged');
-      await engine.adoptConfiguration(id, proposal.hash);
+      await engine.adoptConfiguration(id, proposal.hash, extra);
     }
     await start(store, id);
     ui.say(`Configuration adopted. Use easy-skills status ${store.get(id).plan.featureId} to follow progress.`);

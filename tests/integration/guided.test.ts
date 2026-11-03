@@ -592,3 +592,34 @@ test('a task stopped for a decision adopts approved added checks and keeps its b
     assert.equal(await f.git.run(['show', `${ready.finalReviewHead}:one.txt`]), 'repair in progress');
   } finally {await f.dispose();}
 });
+
+test('a task that used its repair attempts continues only when the owner raises the limit in a new plan', async () => {
+  const f = await setup();
+  try {
+    const plan = await f.wizard.proposal(f.root, '909', f.profile), run = await f.wizard.approve(f.root, plan);
+    let failing = true, rounds = 0;
+    // Distinct failures, so the identical-failure stop cannot end the run before the repair limit does.
+    const engine = new Engine(f.store, {testRemote: f.remote, github: f.github, client: {...f.client, async run(a, p, o) {
+      if (failing && a.model === 'exact-VERIFY') {o.onSession?.(o.session || 'verify'); return {outcome: 'failed', summary: 'Incomplete in round ' + ++rounds, findings: ['Evidence missing ' + rounds]};}
+      return f.client.run(a, p, o);
+    }}});
+    const stopped = await engine.run(run.id);
+    assert.equal(stopped.status, 'needs_decision'); assert.match(stopped.reason!, /Approved repair limit reached \(3 completed attempts/);
+    const attempts = f.store.operation<{state: string}[]>(`${run.id}:repair:feature`)!;
+    assert.equal(attempts.filter(r => r.state === 'completed').length, 3);
+
+    await assert.rejects(engine.adoptConfiguration(run.id), /already uses/);
+    await assert.rejects(engine.adoptConfiguration(run.id, undefined, 9), /from 1 to 5/);
+    const proposal = await engine.adoptConfiguration(run.id, undefined, 2);
+    assert.deepEqual(proposal.repairLimit, {from: 3, to: 5, completed: 3}); assert.deepEqual(proposal.addedChecks, []);
+    await assert.rejects(engine.adoptConfiguration(run.id, proposal.hash, 1), /proposal changed/);
+    await engine.adoptConfiguration(run.id, proposal.hash, 2);
+    const adopted = f.store.get(run.id);
+    assert.equal(adopted.plan.repairPolicy?.maxCompletedAttempts, 5); assert.equal(adopted.status, 'approved'); assert.equal(adopted.planHash, proposal.planHash);
+    assert.equal(f.store.operation<{state: string}[]>(`${run.id}:repair:feature`)!.length, attempts.length, 'earlier attempts keep counting');
+
+    failing = false;
+    const ready = await engine.run(run.id);
+    assert.equal(ready.status, 'ready', ready.reason || '');
+  } finally {await f.dispose();}
+});

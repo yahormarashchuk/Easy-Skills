@@ -114,7 +114,7 @@ export class Engine {
    * After the owner approves a new project configuration, this binds the task to it, keeping its branch, commits and any
    * pending repair. Approved checks can be added but never removed or changed.
    */
-  async adoptConfiguration(id: string, approvedHash?: string) {
+  async adoptConfiguration(id: string, approvedHash?: string, extraRepairs = 0) {
     const owner = this.store.acquire('run:' + id), run = this.store.get(id);
     try {
       if (!['needs_decision', 'paused'].includes(run.status) || ownerAlive(run.childPid, run.childIdentity))
@@ -125,12 +125,18 @@ export class Engine {
         if (project[field] !== previous[field]) throw new Error('A new configuration cannot change task identity: ' + field);
       const removed = previous.checks.filter(check => !project.checks.some(c => hash(c) === hash(check)));
       if (removed.length) throw new Error('A new configuration cannot remove or change approved checks: ' + removed.map(c => c.id).join(', '));
+      if (!Number.isInteger(extraRepairs) || extraRepairs < 0 || extraRepairs > 5) throw new Error('Extra repair attempts must be a whole number from 1 to 5');
+      const repairs = this.store.operation<Repair[]>(repairKey(run, 'feature')) || [], completed = repairs.filter(r => r.state === 'completed').length;
+      // Raising the limit is an owner decision inside the new plan; it counts attempts already made and never lowers the limit.
+      const limit = extraRepairs ? Math.max(run.plan.repairPolicy?.maxCompletedAttempts ?? 0, completed + extraRepairs) : run.plan.repairPolicy?.maxCompletedAttempts;
       const plan = Plan.parse({...run.plan, project, protectedInputs: protectedManifest(run.root, project), rulesHash: rulesHash(run.root),
-        rulesAgreement: requireAgreement(run.root), workflow: {...run.plan.workflow, context: knowledgeSnapshot(run.root)}});
+        rulesAgreement: requireAgreement(run.root), workflow: {...run.plan.workflow, context: knowledgeSnapshot(run.root)},
+        ...(limit === undefined ? {} : {repairPolicy: {maxCompletedAttempts: limit}})});
       if (hash(plan) === run.planHash) throw new Error('The task already uses the approved project configuration');
       const proposal = {runId: id, previousPlanHash: run.planHash, planHash: hash(plan), rulesAgreement: plan.rulesAgreement,
         addedChecks: project.checks.filter(check => !previous.checks.some(c => hash(c) === hash(check))),
-        setupChanged: hash(project.setup || []) !== hash(previous.setup || []), phase: run.finalPhase};
+        setupChanged: hash(project.setup || []) !== hash(previous.setup || []), phase: run.finalPhase,
+        repairLimit: {from: run.plan.repairPolicy?.maxCompletedAttempts, to: plan.repairPolicy?.maxCompletedAttempts, completed}};
       const digest = hash(proposal);
       if (!approvedHash) return {...proposal, hash: digest, status: run.status};
       if (approvedHash !== digest) throw new Error('The configuration proposal changed; review it again');
@@ -148,9 +154,8 @@ export class Engine {
               this.store.recordOperation(key, id, 'setup.adopted', {...setup, fingerprint: hash({commands: project.setup || [], inputs: plan.protectedInputs})});
           }
         }
-        // The owner approved a new plan: completed repairs no longer count against its limit.
-        const repairs = this.store.operation<Repair[]>(repairKey(run, 'feature')) || [];
-        if (repairs.length) {
+        // The owner approved a new plan: completed repairs no longer count against its limit, unless the owner raised the limit itself.
+        if (repairs.length && !extraRepairs) {
           this.store.recordOperation(`${repairKey(run, 'feature')}:superseded:${run.planHash}`, id, 'repair.superseded', repairs);
           this.store.recordOperation(repairKey(run, 'feature'), id, 'repair.adopted', repairs.filter(r => r.state === 'pending').map(r =>
             ({...r, reason: r.reason + '\nThe owner approved a revised project configuration adding checks: ' + proposal.addedChecks.map(c => c.id).join(', ') + '. The runner records their results.'})));
