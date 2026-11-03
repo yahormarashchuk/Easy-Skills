@@ -51,3 +51,14 @@ test('a scoped task excludes unrelated large layer rules and full session histor
     assert.match(prompt, /estimatedTokens/);
   } finally {await f.dispose();}
 });
+
+test('whole-feature review receives the final check evidence, task stages do not', async () => {
+  const f = await fixture();
+  try {
+    f.run.finalEvidence = [{checkId: 'acceptance', head: 'a'.repeat(40), code: 0, finishedAt: '2026-11-03T10:29:59.000Z', log: 'PRIVATE_LOG_PATH'}];
+    const review = context(f.run, 'REVIEW');
+    assert.match(review, /\[check-evidence\]\n\[\{"id":"acceptance","head":"a{40}","code":0,/);
+    assert.ok(!review.includes('PRIVATE_LOG_PATH'));
+    assert.ok(!context(f.run, 'REVIEW', f.run.plan.tasks[0]!).includes('[check-evidence]'));
+  } finally {await f.dispose();}
+});
