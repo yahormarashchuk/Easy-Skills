@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fixture } from '../helpers.js';
-import { context } from '../../src/runner/context.js';
+import { assembleContext, context } from '../../src/runner/context.js';
 import { Engine } from '../../src/runner/engine.js';
 
 test('baseline failure stops before BUILD and is saved separately from feature evidence', async () => {
@@ -60,5 +60,22 @@ test('whole-feature review receives the final check evidence, task stages do not
     assert.match(review, /\[check-evidence\]\n\[\{"id":"acceptance","head":"a{40}","code":0,/);
     assert.ok(!review.includes('PRIVATE_LOG_PATH'));
     assert.ok(!context(f.run, 'REVIEW', f.run.plan.tasks[0]!).includes('[check-evidence]'));
+  } finally {await f.dispose();}
+});
+
+test('an exact session is not sent its unchanged large sections again, but each request keeps its framing and observation', async () => {
+  const f = await fixture();
+  try {
+    const first = assembleContext(f.run, 'REVIEW', undefined, 'first observation');
+    assert.ok(first.manifest.sections.every(s => s.sent), 'a new session receives everything');
+    const second = assembleContext(f.run, 'REVIEW', undefined, 'second observation', undefined, first.manifest);
+    const sent = (name: string) => second.manifest.sections.find(s => s.name === name)!.sent;
+    for (const name of ['core', 'trust', 'review-scope', 'current-observation']) assert.ok(second.manifest.sections.some(s => s.name === name) ? sent(name) : true, name);
+    assert.equal(sent('current-observation'), true);
+    for (const name of ['procedure', 'workflow', 'specification', 'scope']) assert.equal(sent(name), false, name);
+    assert.ok(second.prompt.length < first.prompt.length * 0.6, 'the second prompt is much smaller');
+    assert.match(second.prompt, /\[specification unchanged in this exact session\]/); assert.match(second.prompt, /second observation/);
+    f.run.plan.spec += ' Changed.';
+    assert.equal(assembleContext(f.run, 'REVIEW', undefined, 'x', undefined, first.manifest).manifest.sections.find(s => s.name === 'specification')!.sent, true, 'a changed section is sent again');
   } finally {await f.dispose();}
 });

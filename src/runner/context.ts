@@ -4,7 +4,8 @@ import { fileURLToPath } from 'node:url';
 import type { Run, Stage, Task } from '../contracts.js';
 import { hash, rejectSymlinkPath } from '../util.js';
 
-export const packageRoot = fileURLToPath(new URL('../../', import.meta.url));
+const ALWAYS_SENT = ['core', 'trust', 'review-scope', 'current-observation'];
+export const packageRoot =fileURLToPath(new URL('../../', import.meta.url));
 export interface ContextManifest {sections: {name: string; characters: number; estimatedTokens: number; hash: string; sent: boolean}[]; estimate: string}
 export function assembleContext(run: Run, stage: Stage, task?: Task, extra = '', skillOverride?: string, previous?: ContextManifest) {
   const parts: {name: string; text: string; mandatory: boolean}[] = [];
@@ -63,7 +64,9 @@ Questions may be published on the parent Issue; exclude secrets. Prose never est
   if (stage === 'REVIEW') add('review-scope', 'Independent review: assess the supplied diff, acceptance coverage, regressions and neighboring contracts. Report findings; do not edit.', true);
   add('current-observation', extra, true);
   const manifest: ContextManifest = {estimate: 'estimatedTokens = ceil(characters/4); an approximation, not measured usage', sections: parts.map(p => ({name: p.name, characters: p.text.length, estimatedTokens: Math.ceil(p.text.length / 4), hash: hash(p.text),
-    sent: p.mandatory || !previous?.sections.some(s => s.name === p.name && s.hash === hash(p.text))}))};
+    // Large sections already sent in this exact session are referenced, not repeated, even when mandatory. The short
+    // framing sections and the current observation always travel, so every request is still self-describing.
+    sent: ALWAYS_SENT.includes(p.name) || (p.mandatory && !previous) || !previous?.sections.some(s => s.name === p.name && s.hash === hash(p.text))}))};
   const prompt = parts.map((p, i) => manifest.sections[i]!.sent ? `[${p.name}]\n${p.text}` : `[${p.name} unchanged in this exact session]`).join('\n\n') + '\n\nContext manifest: ' + JSON.stringify(manifest);
   return {prompt, manifest};
 }

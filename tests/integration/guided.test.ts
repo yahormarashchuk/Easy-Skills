@@ -756,3 +756,21 @@ test('REVIEW reads a generated file through its head and tail, but an oversized 
     } finally {await f.dispose();}
   }
 });
+
+test('later REVIEW calls in the same session reference the unchanged context instead of repeating it', async () => {
+  const f = await setup();
+  try {
+    const plan = await f.wizard.proposal(f.root, '909', f.profile), run = await f.wizard.approve(f.root, plan);
+    const reviews: string[] = [];
+    const engine = new Engine(f.store, {testRemote: f.remote, github: f.github, client: {...f.client, async run(a, p, o) {
+      if (a.model === 'exact-BUILD') for (const file of ['one.txt', 'two.txt']) writeFileSync(join(o.cwd, file), 'changed ' + file + '\n');
+      if (a.model === 'exact-REVIEW') reviews.push(p);
+      return f.client.run(a, p, o);
+    }}});
+    assert.equal((await engine.run(run.id)).status, 'ready');
+    assert.ok(reviews.length >= 2, 'the fixture changes several files');
+    assert.ok(!reviews[0]!.includes('unchanged in this exact session'));
+    for (const prompt of reviews.slice(1)) assert.match(prompt, /\[specification unchanged in this exact session\]/);
+    assert.ok(reviews.slice(1).every(prompt => prompt.length < reviews[0]!.length), 'later calls are smaller');
+  } finally {await f.dispose();}
+});
