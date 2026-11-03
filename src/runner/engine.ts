@@ -403,7 +403,8 @@ export class Engine {
       const saved = this.store.operation<{base: string; passed: {path: string; diffHash: string}[]}>(passedKey);
       const passed = saved?.base === base ? saved.passed : [];
       let result: StageResult = {outcome: 'passed', summary: 'No changed paths', findings: []};
-      const failures: string[] = [];
+      const failures: string[] = [], seenFindings = new Set<string>();
+      let repeats = 0;
       for (const path of files) {
         let diff: string;
         try {diff = await new Git(cwd).run(['diff', '--no-ext-diff', '--no-textconv', base, 'HEAD', '--', path], cwd);}
@@ -421,12 +422,20 @@ export class Engine {
           passed.some(c => c.path === path && c.diffHash === entry.diffHash);
         if (!known) {
           // Every file is reviewed before repair, so one repair receives all findings instead of one file's per round.
-          try {result = await this.agent(run, stage, cwd, taskState, task, extra + `\nReview complete file ${JSON.stringify(path)} against ${base}:\n${shown}`, skill, false);}
+          try {result = await this.agent(run, stage, cwd, taskState, task, extra + `\nReview complete file ${JSON.stringify(path)} against ${base}:\n${shown}` +
+            '\nReport only problems located in this file or caused by its diff. Other changed files are reviewed in separate requests; if this file has no problem, return passed even when you noticed issues elsewhere.', skill, false);}
           catch (error) {
             if (!(error instanceof CodeFailure)) throw error;
-            failures.push(`${path}:\n${message(error)}`);
             await new Git(cwd).clean(cwd);
             if (await new Git(cwd).head(cwd) !== head) throw new Blocked('REVIEW changed the revision; coverage was not accepted');
+            // A reviewer that answers every file with the same text is judging the whole commit: keep the text once and stop the round
+            // after three repeats instead of paying for every remaining file; the repair comes first, the rest is reviewed afterwards.
+            const text = message(error), fingerprint = hash(text);
+            if (seenFindings.has(fingerprint)) {
+              if (++repeats >= 3) {failures.push(`(Stopped after ${repeats} further files returned this same result; the files not yet reviewed are reviewed after the repair.)`); break;}
+              continue;
+            }
+            seenFindings.add(fingerprint); repeats = 0; failures.push(`${path}:\n${text}`);
             continue;
           }
         }

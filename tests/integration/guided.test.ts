@@ -774,3 +774,30 @@ test('later REVIEW calls in the same session reference the unchanged context ins
     assert.ok(reviews.slice(1).every(prompt => prompt.length < reviews[0]!.length), 'later calls are smaller');
   } finally {await f.dispose();}
 });
+
+test('REVIEW tells the reviewer to judge only the given file and stops a round once the same whole-commit result repeats', async () => {
+  const f = await setup();
+  try {
+    const plan = await f.wizard.proposal(f.root, '909', f.profile), run = await f.wizard.approve(f.root, plan);
+    const stored = f.store.get(run.id); stored.plan.tasks[0]!.scope = {areas: [], paths: ['.']}; stored.planHash = hash(stored.plan); stored.approvedHash = stored.planHash; f.store.save(stored, 'fixture.scope');
+    let builds = 0, reviewCalls = 0;
+    const prompts: string[] = [];
+    const engine = new Engine(f.store, {testRemote: f.remote, github: f.github, client: {...f.client, async run(a, p, o) {
+      if (a.model === 'exact-BUILD') {builds++; for (let i = 0; i < 12; i++) writeFileSync(join(o.cwd, `file${i}.txt`), `content ${i} build ${builds}\n`);}
+      if (a.model === 'exact-REVIEW' && /Review complete file/.test(p)) {
+        reviewCalls++; prompts.push(p); o.onSession?.(o.session || 'review');
+        // The reviewer ignores the per-file framing and reports the same commit-wide problem each time, until a repair happened.
+        if (builds < 2) return {outcome: 'failed', summary: 'Commit-wide problem', findings: ['Same finding']};
+        return {outcome: 'passed', summary: 'Fine', findings: []};
+      }
+      return f.client.run(a, p, o);
+    }}});
+    assert.equal((await engine.run(run.id)).status, 'ready');
+    assert.ok(prompts.every(p => /Report only problems located in this file/.test(p)));
+    const repair = f.store.operation<{reason: string}[]>(`${run.id}:repair:feature`)![0]!;
+    assert.equal((repair.reason.match(/Commit-wide problem/g) || []).length, 1, 'the same result is kept once');
+    assert.match(repair.reason, /Stopped after 3 further files/);
+    // Four files before the stop (one new result, three repeats), not the twelve of the round.
+    assert.ok(reviewCalls < 12 + 12, 'the first round stops early');
+  } finally {await f.dispose();}
+});
