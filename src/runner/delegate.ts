@@ -4,6 +4,8 @@ import { hash } from '../util.js';
 
 /** Decisions one run may hand to the delegate; beyond this the owner is asked. */
 export const MAX_DELEGATE_DECISIONS = 12;
+/** One delegate request may take this long; a call that hangs is stopped and retried once. */
+export const DELEGATE_TIMEOUT_MS = 8 * 60_000;
 /** Acceptance criteria one amendment may remove, and amendments one run may make; beyond this the owner is asked. */
 export const MAX_NARROW_REMOVALS = 2;
 export const MAX_AMENDMENTS = 3;
