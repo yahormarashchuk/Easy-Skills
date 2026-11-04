@@ -29,6 +29,14 @@ test('contracts reject unknown dependencies, cycles, duplicate IDs and hidden pe
     assert.equal(StageResult.safeParse({outcome: 'passed', summary: 'ok'}).success, false);
   } finally {await f.dispose();}
 });
+test('a Claude write session may use both shells, and a read session gets neither', () => {
+  const tools = (mode: 'read' | 'write') => {
+    const args = invocation({provider: 'claude-code', model: 'exact-id'}, undefined, mode).args;
+    return args.slice(args.indexOf('--allowedTools') + 1, args.indexOf('--effort') < 0 ? undefined : args.indexOf('--effort'));
+  };
+  assert.ok(tools('write').includes('Bash')); assert.ok(tools('write').includes('PowerShell'));
+  assert.ok(!tools('read').includes('Bash')); assert.ok(!tools('read').includes('PowerShell'));
+});
 test('adapter commands preserve exact model and session, use stdin and no bare or bypass', () => {
   for (const provider of ['codex', 'claude-code'] as const) {
     const spec = invocation({provider, model: 'exact-id'}, 'exact-session');

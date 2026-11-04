@@ -42,7 +42,8 @@ export function invocation(assignment: Assignment, session?: string, mode: 'read
   }
   const diagnostics = protocol.capabilities?.diagnostics || [], browser = protocol.capabilities?.browserTools || [];
   if (diagnostics.some(d => /[\r\n\0]/.test(d)) || browser.some(t => !/^mcp__[\w-]+__[\w-]+$/.test(t))) throw new Error('Unsupported diagnostic command or browser tool permission');
-  const allowed = mode === 'write' ? ['Read', 'Glob', 'Grep', 'Edit', 'Write', 'Bash'] : ['Read', 'Glob', 'Grep', ...diagnostics.map(d => `Bash(${d})`), ...browser];
+  // On Windows Claude Code offers a PowerShell tool next to Bash; under dontAsk every tool that is not listed is denied, so a write session needs both shells.
+  const allowed = mode === 'write' ? ['Read', 'Glob', 'Grep', 'Edit', 'Write', 'Bash', 'PowerShell'] :['Read', 'Glob', 'Grep', ...diagnostics.map(d => `Bash(${d})`), ...browser];
   const args = [...CLAUDE_BASE_ARGS, '-p', '--model', assignment.model, '--output-format', 'stream-json', '--verbose', '--json-schema', JSON.stringify(outputSchema(protocol.planning)),
     '--permission-mode', 'dontAsk', '--allowedTools', ...allowed];
   if (assignment.effort) args.push('--effort', assignment.effort);
