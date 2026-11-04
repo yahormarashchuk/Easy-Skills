@@ -61,7 +61,7 @@ test('an amendment removes only the named criteria of one task and is proven to 
   assert.match(narrowingViolation(plan, after, 'zzz', [1])!, /not in the approved plan/);
   const tamper = (change: (copy: Plan) => void) => {const copy = structuredClone(after); change(copy); return narrowingViolation(plan, copy, 'one', [1, 2]);};
   assert.match(tamper(p => {p.tasks[0]!.scope!.paths.push('extra.txt');})!, /more than acceptance/);
-  assert.match(tamper(p => {p.tasks[0]!.description = 'changed';})!, /more than acceptance/);
+  assert.match(tamper(p => {p.tasks[0]!.description = 'changed';})!, /description is not the approved one/);
   assert.match(tamper(p => {p.project.checks.pop();})!, /more than acceptance/);
   assert.match(tamper(p => {p.permissions.publishIssues = true;})!, /more than acceptance/);
   assert.match(tamper(p => {p.repairPolicy!.maxCompletedAttempts = 9;})!, /more than acceptance/);

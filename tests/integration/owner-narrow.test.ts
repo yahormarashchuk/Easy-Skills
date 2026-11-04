@@ -8,7 +8,7 @@ import { hash } from '../../src/util.js';
 async function stopped() {
   const f = await fixture();
   const run = f.engine.approve(f.run.id, f.run.planHash);
-  const tasks = run.plan.tasks.map((t, index) => index === 0 ? {...t, acceptance: ['Behaviour works', 'Validator rejects stale results', 'Full contract passes', 'Documents are updated']} : t);
+  const tasks = run.plan.tasks.map((t, index) => index === 0 ? {...t, description: 'Adopt the repair. Add a result validator. Run postgres-checkin, result-validator-tests and every other extra check.', acceptance: ['Behaviour works', 'Validator rejects stale results', 'Full contract passes', 'Documents are updated']} : t);
   run.plan = {...run.plan, tasks}; run.planHash = hash(run.plan); run.approvedHash = run.planHash; run.status = 'needs_decision';
   run.pendingDecision = {id: '0b0b0b0b-0b0b-4b0b-8b0b-0b0b0b0b0b0b', planHash: run.planHash, head: 'a'.repeat(40), stage: 'VERIFY', taskId: run.plan.tasks[0]!.id, question: 'Which criteria?'};
   run.parentIssue = 4242;
@@ -36,6 +36,27 @@ test('the owner narrows a stopped task by reviewed hash, and only the named crit
     assert.equal(history?.planHash, previousHash);
     assert.ok((f.store.events(id) as {type: string; data: string}[]).some(e => e.type === 'plan.narrowed' && JSON.parse(e.data).owner === true));
     assert.ok(f.github.commentsWritten.some(c => c.includes('Removed acceptance criteria') && c.includes('Validator rejects stale results')));
+  } finally {await f.dispose();}
+});
+
+test('the owner may also replace a task description by a shorter one, with or without removing criteria', async () => {
+  const {f, id, task, engine} = await stopped();
+  try {
+    const before = f.store.get(id), original = before.plan.tasks.find(t => t.id === task)!.description;
+    const shorter = 'Adopt the repair.';
+    assert.ok(shorter.length < original.length);
+    const proposal = await engine.narrowAcceptance(id, task, [], 'The description demanded checks that do not exist.', undefined, shorter);
+    assert.equal(proposal.descriptionChanged, true); assert.deepEqual(proposal.removed, []); assert.equal(proposal.remaining.length, 4);
+    await assert.rejects(engine.narrowAcceptance(id, task, [], 'why', undefined, original + ' and more'), /not longer than the approved one/);
+    await assert.rejects(engine.narrowAcceptance(id, task, [], 'why', undefined, '   '), /non-empty/);
+    await assert.rejects(engine.narrowAcceptance(id, task, [], 'why'), /Name existing, distinct criteria/);
+    await engine.narrowAcceptance(id, task, [1], 'The description demanded checks that do not exist.', proposal.hash, shorter).then(() => assert.fail('a different request must not use another hash'), error => assert.match(String(error), /proposal changed/));
+    const both = await engine.narrowAcceptance(id, task, [1], 'The description demanded checks that do not exist.', undefined, shorter);
+    await engine.narrowAcceptance(id, task, [1], 'The description demanded checks that do not exist.', both.hash, shorter);
+    const after = f.store.get(id), amended = after.plan.tasks.find(t => t.id === task)!;
+    assert.equal(amended.description, shorter); assert.equal(amended.acceptance.length, 3); assert.equal(after.status, 'approved');
+    assert.deepEqual(after.plan.tasks.filter(t => t.id !== task), before.plan.tasks.filter(t => t.id !== task), 'other tasks are untouched');
+    assert.deepEqual({...after.plan, tasks: []}, {...before.plan, tasks: []});
   } finally {await f.dispose();}
 });
 
