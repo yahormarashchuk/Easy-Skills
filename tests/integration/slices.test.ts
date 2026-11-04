@@ -7,7 +7,7 @@ import { Guided, type Interaction, type ModelProfile } from '../../src/runner/gu
 import { Plan } from '../../src/contracts.js';
 import { Engine } from '../../src/runner/engine.js';
 import { Gh } from '../../src/github/index.js';
-import type { Client } from '../../src/adapters/index.js';
+import { ClientError, type Client } from '../../src/adapters/index.js';
 import { hash } from '../../src/util.js';
 
 // Sliced features are the default for new guided tasks; nothing here selects the direct workflow.
@@ -202,4 +202,13 @@ test('the GitHub transport reuses a milestone by title and never merges a slice 
   base = 'trunk'; requests.length = 0;
   await assert.rejects(gh.mergeSlice(7, 'h', 'b'), /never the default branch/);
   assert.ok(!requests.some(r => r.includes('/merge')));
+});
+
+test('a cut-off GitHub response is a temporary network failure, not an owner decision', async () => {
+  for (const stderr of ['unexpected end of JSON input\n', 'unexpected EOF']) {
+    const gh = new Gh('test/example', '.', async () => ({code: 1, stdout: '', stderr, timedOut: false, truncated: false}));
+    await assert.rejects(gh.api('issues'), (error: unknown) => error instanceof ClientError && error.kind === 'network');
+  }
+  const refused = new Gh('test/example', '.', async () => ({code: 1, stdout: '', stderr: 'something else failed', timedOut: false, truncated: false}));
+  await assert.rejects(refused.api('issues'), (error: unknown) => error instanceof ClientError && error.kind === 'protocol');
 });
