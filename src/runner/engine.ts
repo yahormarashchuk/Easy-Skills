@@ -22,6 +22,7 @@ import { ownerAlive, processIdentity } from '../process-identity.js';
 import { ignoredOutputs } from './setup-outputs.js';
 import { publishRepairIssue, repairIssues, issueLabels, closeRepairIssues, allRepairs, milestone, milestoneKey, sliceRepairIssues } from './issue-history.js';
 import { pullRequestBody, pullRequestTitle } from './pull-request.js';
+import { evidenceView } from './check-summary.js';
 import { DELEGATE_TIMEOUT_MS, MAX_DELEGATE_DECISIONS, acceptDelegateReply, delegatePrompt, narrowedPlan, narrowingViolation, type DelegateReply, type Narrowable } from './delegate.js';
 
 class Blocked extends Error {}
@@ -761,7 +762,7 @@ export class Engine {
           }
           case 'VERIFY': {
             state.evidence = await this.checks(run, git, cwd);
-            await this.agent(run, 'VERIFY', cwd, state, task, `Independent check evidence: ${JSON.stringify(state.evidence.map(({log, ...entry}) => entry))}. Inspect acceptance coverage and missing checks.`);
+            await this.agent(run, 'VERIFY', cwd, state, task, `Independent check evidence (exit code and the totals each check printed): ${JSON.stringify(state.evidence.map(evidenceView))}. Inspect acceptance coverage and missing checks.`);
             if (await git.head(cwd) !== state.head) throw new Blocked('VERIFY changed the commit');
             await git.clean(cwd); state.cursor = 'REVIEW';
             confirmedProgress(this.store, run, `task:${state.id}:VERIFY`, state.head!);
@@ -779,7 +780,7 @@ export class Engine {
           case 'SHIP': {
             const head = await git.head(cwd);
             if (state.reviewHead !== head || !this.sufficient(run, state.evidence, head)) {state.cursor = 'VERIFY'; break;}
-            await this.agent(run, 'SHIP', cwd, state, task, 'Inspect delivery readiness. The runner publishes and closes the Issue. SHIP cannot edit code: if you find a real defect that needs a code or test change, return outcome failed with the defect in findings so the runner repairs it; return blocked only for a decision that nobody but the owner can make.');
+            await this.agent(run, 'SHIP', cwd, state, task, `Inspect delivery readiness. The runner publishes and closes the Issue. Check results at this head (exit code and the totals each check printed): ${JSON.stringify(state.evidence.map(evidenceView))}. SHIP cannot edit code: if you find a real defect that needs a code or test change, return outcome failed with the defect in findings so the runner repairs it; never return failed or blocked because evidence, counts, a PR or a review is not shown to you, since the runner provides them at the right stage. Return blocked only for a decision that nobody but the owner can make.`);
             await git.clean(cwd); if (await git.head(cwd) !== head) throw new Blocked('SHIP changed the reviewed commit');
             await git.push(state.branch!, cwd);
             const checked = `Checks at ${head}:\n${state.evidence.map(e => '- ' + e.checkId + ': passed').join('\n')}\n\nReview: passed at ${state.reviewHead}`;
@@ -999,7 +1000,7 @@ export class Engine {
         }
         const head = await git.head(cwd);
         if (head !== run.finalReviewHead || !this.sufficient(run, run.finalEvidence, head)) {run.finalPhase = 'VERIFY'; continue;}
-        await this.agent(run, 'SHIP', cwd, undefined, undefined, 'Verify final PR readiness. Do not merge the main branch. SHIP cannot edit code: if you find a real defect that needs a code or test change, return outcome failed with the defect in findings so the runner repairs it; return blocked only for a decision that nobody but the owner can make.');
+        await this.agent(run, 'SHIP', cwd, undefined, undefined, 'Verify final PR readiness. Do not merge the main branch. The check evidence lists the exit code of each check and the totals it printed (executed, failed, skipped). SHIP cannot edit code: if you find a real defect that needs a code or test change, return outcome failed with the defect in findings so the runner repairs it; never return failed or blocked because evidence, counts, a PR or a review is not shown to you, since the runner provides them at the right stage. Return blocked only for a decision that nobody but the owner can make.');
         await git.clean(cwd); if (await git.head(cwd) !== head) throw new Blocked('Final SHIP changed the commit');
         if (run.plan.workflow && (!run.plan.workflow.permissions.pushBranch || !run.plan.workflow.permissions.createPullRequest))
           throw new Blocked('The approved task does not authorize branch push and PR creation');
