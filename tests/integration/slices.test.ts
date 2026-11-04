@@ -332,6 +332,24 @@ test('the GitHub transport reuses a milestone by title and never merges a slice 
   assert.ok(!requests.some(r => r.includes('/merge')));
 });
 
+test('a slice PR is merged with a method the repository allows: merge commit, else squash, else rebase, else a clear refusal', async () => {
+  const used: string[] = [];
+  const gh = (allowed: {allow_merge_commit?: boolean; allow_squash_merge?: boolean; allow_rebase_merge?: boolean}) => new Gh('test/example', '.', async (command, options) => {
+    const path = command.args[3] || '';
+    let value: unknown;
+    if (path === 'repos/test/example/pulls/7') value = {number: 7, html_url: 'u', head: {sha: 'h', ref: 'issue/x'}, base: {sha: 'b', ref: 'feature/x'}, state: 'open', merged_at: null};
+    else if (path === 'repos/test/example') value = {default_branch: 'trunk', ...allowed};
+    else if (path === 'repos/test/example/pulls/7/merge') {used.push(JSON.parse(String(options.input)).merge_method); value = {merged: true};}
+    return {code: 0, stdout: JSON.stringify(value), stderr: '', timedOut: false, truncated: false};
+  });
+  await gh({allow_merge_commit: true, allow_squash_merge: true}).mergeSlice(7, 'h', 'b');
+  await gh({allow_merge_commit: false, allow_squash_merge: true, allow_rebase_merge: false}).mergeSlice(7, 'h', 'b');
+  await gh({allow_merge_commit: false, allow_squash_merge: false, allow_rebase_merge: true}).mergeSlice(7, 'h', 'b');
+  assert.deepEqual(used, ['merge', 'squash', 'rebase']);
+  await assert.rejects(gh({allow_merge_commit: false, allow_squash_merge: false, allow_rebase_merge: false}).mergeSlice(7, 'h', 'b'), /allows no merge method/);
+  assert.equal(used.length, 3, 'nothing is merged when no method is allowed');
+});
+
 test('a cut-off GitHub response is a temporary network failure, not an owner decision', async () => {
   for (const stderr of ['unexpected end of JSON input\n', 'unexpected EOF']) {
     const gh = new Gh('test/example', '.', async () => ({code: 1, stdout: '', stderr, timedOut: false, truncated: false}));

@@ -241,10 +241,13 @@ export class Gh implements GitHub {
     if (pr.state !== 'OPEN') throw new MergeTerminalError('failed', 'Slice PR is closed without merge');
     if (pr.baseRefOid !== base) throw new Error('Feature branch changed; sync and validate the slice again');
     // The runner's own evidence never merges into the default branch; that merge stays with the owner.
-    const repository = await this.request<{default_branch: string}>(['api', '--hostname', 'github.com', `repos/${this.repository}`, '-H', 'X-GitHub-Api-Version: 2026-03-10']);
+    const repository = await this.request<{default_branch: string; allow_merge_commit?: boolean; allow_squash_merge?: boolean; allow_rebase_merge?: boolean}>(['api', '--hostname', 'github.com', `repos/${this.repository}`, '-H', 'X-GitHub-Api-Version: 2026-03-10']);
     if (pr.baseRefName === repository.default_branch) throw new Error('A slice PR must target the feature branch, never the default branch');
+    // A repository may allow only some merge methods (this one allows squash only); use one it allows, a merge commit first.
+    const method = repository.allow_merge_commit !== false ? 'merge' : repository.allow_squash_merge !== false ? 'squash' : repository.allow_rebase_merge !== false ? 'rebase' : undefined;
+    if (!method) throw new MergeTerminalError('failed', 'The repository allows no merge method for the slice PR');
     let result: {merged?: boolean; message?: string};
-    try {result = await this.api(`pulls/${number}/merge`, 'PUT', {sha: head, merge_method: 'merge'});}
+    try {result = await this.api(`pulls/${number}/merge`, 'PUT', {sha: head, merge_method: method});}
     catch (error) {
       if (!(error instanceof GitHubHttpError) || ![405, 409].includes(error.status)) throw error;
       // A lost response to an accepted merge leaves the PR merged at this head; anything else is a terminal refusal.
