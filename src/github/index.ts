@@ -62,7 +62,8 @@ export class Gh implements GitHub {
       if (status === 429) throw new ClientError('quota', 'GitHub rate limit exceeded');
       if ([500, 502, 503, 504].includes(status)) throw new ClientError('network', 'GitHub temporarily unavailable');
       if (status) throw new GitHubHttpError(status, value);
-      if (/ECONNRESET|ETIMEDOUT|ENOTFOUND|connection refused|unable to connect/i.test(result.stderr)) throw new ClientError('network', redact(result.stderr));
+      // gh reports an empty or cut-off body from a GitHub gateway error as a JSON parse failure without an HTTP status.
+      if (/ECONNRESET|ETIMEDOUT|ENOTFOUND|connection refused|unable to connect|unexpected end of JSON input|unexpected EOF/i.test(result.stderr)) throw new ClientError('network', redact(result.stderr));
       throw new ClientError('protocol', redact(result.stderr || 'GitHub transport failed without a structured status'));
     }
     return value as T;
