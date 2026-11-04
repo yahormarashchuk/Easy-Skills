@@ -112,7 +112,7 @@ export interface Run {
   childPid?: number; childStartedAt?: string; childIdentity?: string; reason?: string; retryAt?: string;
   activeResource?: string;
   stopReason?: string;
-  pendingDecision?: {id: string; planHash: string; head: string; stage: Stage; taskId?: string; question: string; answer?: string};
+  pendingDecision?: {id: string; planHash: string; head: string; stage: Stage; taskId?: string; question: string; answer?: string; source?: 'owner' | 'delegate'};
   failures: {fingerprint: string; head: string; count: number};
   control?: 'pause' | 'stop';
 }
@@ -134,7 +134,7 @@ export const RunSchema = z.object({
   childIdentity: z.string().optional(), activeResource: z.string().optional(), reason: z.string().optional(), retryAt: z.string().optional(),
   stopReason: z.enum(['quota', 'auth', 'network', 'model', 'failure', 'protocol', 'refusal', 'prerequisite', 'review_input', 'waiting_ci', 'waiting_merge', 'resource_busy', 'decision']).optional(),
   pendingDecision: z.object({id: z.uuid(), planHash: z.string(), head: z.string(), stage: Stage,
-    taskId: z.string().optional(), question: z.string(), answer: z.string().optional()}).strict().optional(),
+    taskId: z.string().optional(), question: z.string(), answer: z.string().optional(), source: z.enum(['owner', 'delegate']).optional()}).strict().optional(),
   failures: z.object({fingerprint: z.string(), head: z.string(), count: z.number().int().nonnegative()}).strict(),
   control: z.enum(['pause', 'stop']).optional(),
 }).strict();

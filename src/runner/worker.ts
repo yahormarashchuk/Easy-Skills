@@ -1,6 +1,6 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { Store, ResourceBusy } from '../persistence/store.js';
-import { Engine } from './engine.js';
+import { Engine, delegateDecisionsEnabled } from './engine.js';
 import { pollRemote } from './remote.js';
 import { flushNotifications } from '../notifications/index.js';
 import { message, redact } from '../util.js';
@@ -15,7 +15,7 @@ export async function worker(store: Store, id: string, options: {engine?: Engine
   options.signal?.addEventListener('abort', stop, {once: true});
   if (options.signal?.aborted) abort.abort();
   process.once('SIGTERM', stop); process.once('SIGINT', stop);
-  const engine = options.engine || new Engine(store, {signal: abort.signal});
+  const engine = options.engine || new Engine(store, {signal: abort.signal, delegateDecisions: delegateDecisionsEnabled()});
   const clock = options.now || Date.now, pollMs = options.pollMs || 15_000;
   const report = (type: string, error: unknown) => {
     const detail = {kind: error instanceof ResourceBusy ? 'resource_busy' : 'infrastructure', message: redact(message(error))};
