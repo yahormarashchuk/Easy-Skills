@@ -8,7 +8,7 @@ import { CliClient, ClientError, classify, type Client } from '../adapters/index
 import { Git } from '../git/index.js';
 import { Gh, MergeTerminalError, type GitHub } from '../github/index.js';
 import { execute } from '../process.js';
-import { alive, ensureDir, hash, message, now, redact, rulesHash, rejectSymlinkPath } from '../util.js';
+import { alive, ensureDir, hash, inScope, message, now, redact, rulesHash, rejectSymlinkPath } from '../util.js';
 import { assembleContext, type ContextManifest } from './context.js';
 import { recordFailure, confirmedProgress } from './failures.js';
 import { requireCompatibility } from './compatibility.js';
@@ -49,8 +49,7 @@ export class Engine {
         const base = await git.run(['merge-base', `origin/${run.plan.project.mainBranch}`, 'HEAD'], cwd);
         const changed = (await git.run(['diff', '--name-only', '-z', base, '--'], cwd)).split('\0').filter(Boolean);
         changed.push(...(await git.run(['ls-files', '--others', '--exclude-standard', '-z'], cwd)).split('\0').filter(Boolean));
-        const paths = run.plan.tasks[0]!.scope!.paths.map(p => p.replace(/\/$/, ''));
-        const outside = changed.filter(p => !paths.some(allowed => allowed === '.' || p === allowed || p.startsWith(allowed + '/')));
+        const outside = changed.filter(p => !inScope(p, run.plan.tasks[0]!.scope!.paths));
         if (outside.length) throw new Blocked('Changes exceed the approved task paths: ' + outside.join(', '));
       }
     }
