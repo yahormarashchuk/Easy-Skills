@@ -15,7 +15,7 @@ import { discover, knowledgeSnapshot } from './discovery.js';
 import { requireAgreement, agreementPath, Interview } from './onboarding.js';
 import { requireCompatibility } from './compatibility.js';
 import { loadProject } from '../cli/project.js';
-import { generatePlan } from './planning.js';
+import { generatePlan, PlanDecisionNeeded, type PlanDecision } from './planning.js';
 import { Engine } from './engine.js';
 import { resolveChoice, type Choice } from '../cli/choices.js';
 import type { ModelOption } from '../adapters/model-catalog.js';
@@ -406,10 +406,26 @@ export class Guided {
     let featureId = previous?.plan.featureId || (source.issue ? 'issue-' + source.issue.number : this.store.operation<string>(key + ':feature-id'));
     if (!featureId) {featureId = 'task-' + randomUUID().slice(0, 8); this.store.recordOperation(key + ':feature-id', key, 'task.identified', featureId);}
     this.showStage('PLAN', 'current');
-    const plan = await this.observe('PLAN', profile.assignments.PLAN, previous?.worktree || root, onLine => generatePlan(this.store, root, {featureId,
-      title: source.title, spec: reply.specification + (refinement ? '\n\nOwner clarification:\n' + redact(refinement) : '') + '\n\nAcceptance:\n' + reply.acceptance.map(s => '- ' + s).join('\n') + '\n\nOut of scope:\n' + reply.outOfScope.map(s => '- ' + s).join('\n'),
-      assignments: profile.assignments, permissions: {publishIssues: false, mergeIntermediate: false}, workflow}, this.client,
-      previous ? {worktree: previous.worktree!, plan: previous.plan, head: previous.finalReviewHead!} : undefined, true, onLine));
+    // Decisions PLAN asked for are owner answers like DEFINE's: asked once, saved, and replayed on every later planning attempt.
+    const decisionsKey = key + ':plan-decisions';
+    let decisions = this.store.operation<PlanDecision[]>(decisionsKey) || [], plan: Plan | undefined;
+    for (let round = 0; !plan; round++) {
+      try {
+        plan = await this.observe('PLAN', profile.assignments.PLAN, previous?.worktree || root, onLine => generatePlan(this.store, root, {featureId,
+          title: source.title, spec: reply.specification + (refinement ? '\n\nOwner clarification:\n' + redact(refinement) : '') + '\n\nAcceptance:\n' + reply.acceptance.map(s => '- ' + s).join('\n') + '\n\nOut of scope:\n' + reply.outOfScope.map(s => '- ' + s).join('\n'),
+          assignments: profile.assignments, permissions: {publishIssues: false, mergeIntermediate: false}, workflow}, this.client,
+          previous ? {worktree: previous.worktree!, plan: previous.plan, head: previous.finalReviewHead!} : undefined, true, onLine, decisions));
+      } catch (error) {
+        if (!(error instanceof PlanDecisionNeeded)) throw error;
+        if (decisions.some(decision => decision.question === error.question)) throw new Error('PLAN asked again a decision you already answered; your answers are saved. Rerun to plan again.\nQuestion: ' + redact(error.question));
+        if (round >= 5) throw new Error('PLAN reached its bounded decision limit; your answers are saved. Rerun to plan again.\nQuestion: ' + redact(error.question));
+        this.ui.say('PLAN needs your decision: ' + redact(error.summary));
+        const answer = redact(await this.ui.ask('interview:plan-decision-' + hash(error.question).slice(0, 12), redact(error.question)));
+        if (!answer.trim()) throw new Error('PLAN needs an answer to continue: ' + redact(error.question));
+        decisions = [...decisions, {question: error.question, answer}];
+        this.store.recordOperation(decisionsKey, key, 'plan.decided', decisions);
+      }
+    }
     if (previous && plan.spec === previous.plan.spec) throw new Error('Feedback planning did not produce a revised specification');
     return plan;
   }
