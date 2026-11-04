@@ -200,6 +200,7 @@ test('a delegate narrows the slice plan: the stage continues in its session with
     assert.match(verifies[1]!.prompt, /Third rejects stale results with a new validator/);
     assert.match(verifies[0]!.prompt, /never demand checks, manifests or provenance that are not in the approved configuration/);
     assert.match(verifies[0]!.prompt, /\["acceptance"\]/); assert.match(verifies[0]!.prompt, /naming the criterion by its number/);
+    assert.match(verifies[0]!.prompt, /Standard of proof: read the diff, the documents and the tests/); assert.match(verifies[0]!.prompt, /never block because evidence is not independent/);
     assert.match(f.delegated[0]!, /Acceptance criteria of task "three" you may narrow:\n0: Third works\n1: Third is proven/);
 
     // The event and the Issue comment record it; the slice PR lists only the amended criteria.
