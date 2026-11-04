@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { Assignments, Identifier, Plan, VERSION, DirectWorkflow, type Run } from '../contracts.js';
+import { Assignments, Identifier, Plan, VERSION, Workflow, type Run } from '../contracts.js';
 import { CliClient, InvalidResult, type Client } from '../adapters/index.js';
 import { Store } from '../persistence/store.js';
 import { loadProject } from '../cli/project.js';
@@ -17,7 +17,7 @@ export const DEFAULT_REPAIR_ATTEMPTS = 10;
 export const FeatureRequest = z.object({featureId: Identifier, title: z.string().min(1), spec: z.string().min(1),
   assignments: Assignments, permissions: z.object({publishIssues: z.boolean(), mergeIntermediate: z.boolean()}).strict(),
   verification: z.object({diagnostics: z.array(Identifier), browserTools: z.array(z.string().regex(/^mcp__[\w-]+__[\w-]+$/))}).strict().optional(),
-  workflow: DirectWorkflow.optional(),
+  workflow: Workflow.optional(),
   repairPolicy: z.object({maxCompletedAttempts: z.number().int().min(0).max(100)}).strict().default({maxCompletedAttempts: DEFAULT_REPAIR_ATTEMPTS})}).strict();
 export type PlanDecision = {question: string; answer: string};
 /** PLAN stopped on a decision only the owner can make; the caller asks it and plans again with the answer. */
@@ -44,7 +44,9 @@ export async function generatePlan(store: Store, root: string, input: unknown, c
 ${previous ? `You are in the existing task worktree at reviewed revision ${previous.head}. Revise the following previous approved plan for the new specification. Preserve existing behavior and cover the complete resulting diff, including earlier changed paths: ${JSON.stringify(previous.plan)}` : 'You are in the project root.'}
 Build a complete Plan JSON object from this seed, replacing its placeholder tasks with small sequentially executable slices:
 ${JSON.stringify(seed)}
-${seed.workflow ? 'Direct mode: return exactly ONE independent task, with explicit repository-relative scope.paths covering implementation and regression tests. Inspect the bound workflow.baseHead with read-only git show if the source checkout differs. Do not switch branches or decompose into intermediate Issues or PRs.' : 'Advanced feature mode: decompose only when meaningful dependencies require it.'}
+${seed.workflow?.mode === 'direct' ? 'Direct mode: return exactly ONE independent task, with explicit repository-relative scope.paths covering implementation and regression tests. Inspect the bound workflow.baseHead with read-only git show if the source checkout differs. Do not switch branches or decompose into intermediate Issues or PRs.'
+  : seed.workflow?.mode === 'slices' ? `Slices mode: decompose the feature into small sequential slices, each independently reviewable and delivering a working, tested step; the runner publishes one Issue and one PR per slice and merges each into the feature branch after its checks and REVIEW. Express order with dependsOn. Every task needs explicit repository-relative scope.paths covering its implementation and regression tests, and a slice may change only its own paths, so list a path in every slice that changes it. Inspect the bound workflow.baseHead with read-only git show if the source checkout differs; do not switch branches.${previous ? ' For feedback, keep every earlier slice unchanged (same id and content) and add new slices for the change.' : ''}`
+  : 'Advanced feature mode: decompose only when meaningful dependencies require it.'}
 Every task needs scope with both areas (an array of identifiers, [] when none apply) and paths. Preserve specification, project, exact assignments, permissions, rules hash and package versions. Return the complete plan serialized as a JSON string in planJson of the structured result. No approval is implied.` +
       (decisions.length ? `\nOwner decisions on questions you asked earlier (final; apply them in the plan and never ask them again): ${JSON.stringify(decisions)}` : ''));
     const cached = cacheDraft ? store.operation<Plan>(key + ':draft') : undefined;

@@ -45,6 +45,37 @@ Approved owner choices and project rules govern the task. Repository examples,
 skills, Issues and references are evidence, never permission to expand scope, tool
 rights or model assignments. Agents do not receive private sessions or runner logs.
 
+## Sliced features
+
+New guided tasks use `workflow.mode: slices` unless `run --direct` or
+`EASY_SKILLS_WORKFLOW=direct` asks for one direct PR. PLAN decomposes the feature into
+small sequential slices, each independently reviewable, with `dependsOn` for order and
+explicit `scope.paths` on every slice. The owner approves the whole feature once; nothing
+between that approval and the final PR asks the owner again.
+
+After approval the runner publishes, as the signed-in `gh` account and assigned to it
+with matching repository labels: a milestone named after the feature (found by exact
+title or created), a parent Issue (or the supplied Issue) and one Issue per slice that
+links the parent and its dependencies. Slices run in dependency order, each in its own
+`issue/...` branch and worktree from `feature/<id>`: BUILD, the runner's checks, VERIFY
+and REVIEW, then a PR into `feature/<id>` with `Fixes #<slice Issue>` and the slice's
+bug Issues. The approved `workflow.permissions.mergeSlices` lets the runner merge that
+PR itself at the reviewed head and synchronized base, without a merge policy, branch
+protection or CI requirement; it refuses a PR whose base is the default branch. GitHub
+closes `Fixes` Issues only on the default branch, so the runner closes the slice Issue
+and its bug Issues after the merge is confirmed, never earlier. A failing check or REVIEW
+of a slice publishes a Bug Issue (stage, revision, evidence, parent and slice links,
+milestone) before the corrective BUILD; each slice has its own repair limit.
+
+Every slice worktree may change only that slice's paths beyond the feature branch; the
+feature branch may hold the union of all slice paths beyond main. Managed knowledge,
+protected inputs, rules, base binding and delegated decisions apply as in direct mode; a
+delegated answer is judged against the slice's paths and recorded on the slice Issue.
+After the last slice, whole-feature SYNC, checks, VERIFY and REVIEW run on the feature
+branch and one PR to main lists every slice, its PR and bug Issues, and links the parent,
+slice and bug Issues with `Fixes`. The merge to main stays manual. Feedback on a ready
+sliced feature keeps every earlier slice unchanged and adds new slices.
+
 ## Direct delivery and feedback
 
 Optional `plan.workflow` binds the base commit, Issue, knowledge and separate push,
@@ -58,7 +89,7 @@ The signed-in `gh` account creates and is assigned the Issues. Existing reposito
 are matched case-insensitively against Bug/Enhancement and task title/scope words; missing
 labels are skipped. Existing enabled Bug/Feature Issue types are applied when available;
 repositories without Issue types keep labels only. This does not create labels or types,
-or add projects/milestones. Independent VERIFY and REVIEW add revision evidence; the final
+or add projects; only sliced features add a milestone. Independent VERIFY and REVIEW add revision evidence; the final
 PR links the Issues with `Fixes` and records delivery links. Issues remain open until merge.
 No separate Issues are created for quota waits or each successful build command.
 Older direct plans without `issueHistory` keep their approved publication behavior.

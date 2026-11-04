@@ -3,7 +3,7 @@ import { existsSync, readFileSync, writeFileSync, copyFileSync, renameSync, real
 import { join, resolve, relative, isAbsolute } from 'node:path';
 import { z } from 'zod';
 import { stringify } from 'yaml';
-import { Assignments, Assignment, Plan, Project, Provider, Stage, type Run } from '../contracts.js';
+import { Assignments, Assignment, Plan, Project, Provider, Stage, type Run, type Workflow } from '../contracts.js';
 import { CliClient, type Client, type ProviderOption } from '../adapters/index.js';
 import { describeActivity } from '../adapters/activity.js';
 import { Gh, type GitHub, type Issue } from '../github/index.js';
@@ -57,7 +57,7 @@ function cleanContent(value: unknown): unknown {
 /** Public orchestration uses the same contracts as advanced commands; UI consent is explicit. */
 export class Guided {
   readonly client: Client;
-  constructor(readonly store: Store, readonly ui: Interaction, readonly options: {client?: Client; github?: GitHub; testRemote?: string} = {}) {
+  constructor(readonly store: Store, readonly ui: Interaction, readonly options: {client?: Client; github?: GitHub; testRemote?: string; workflow?: 'direct' | 'slices'} = {}) {
     this.client = options.client || new CliClient();
   }
   private assertHome(root: string) {
@@ -400,9 +400,12 @@ export class Guided {
       `Investigate the task, relevant code, tests and skills. Keep unrelated linked Issues out of scope. Derive meaningful acceptance criteria and explicit exclusions. Ask only important questions that repository evidence cannot answer. Inspect related references only when useful; do not run checks. The source checkout can differ from the target: inspect git show ${discovery.baseHead}:PATH for relevant target code without changing branches. For feedback, inspect the provided existing worktree and actual diff as well.\nTask: ${JSON.stringify(source)}\nApproved project rules: ${JSON.stringify(knowledgeSnapshot(root))}\nDiscovery: ${JSON.stringify(discovery)}\nPrevious PR: ${previous?.finalPr?.url || 'none'}`, TaskReply);
     this.ui.say('Specification:\n' + reply.specification + '\nAcceptance:\n' + reply.acceptance.map(s => '- ' + s).join('\n') + '\nOut of scope:\n' + reply.outOfScope.map(s => '- ' + s).join('\n') + '\nOpen questions: 0');
     if (!await this.ui.confirm('task:specification', 'Continue to technical planning with this specification?')) throw new Error('Task specification was not confirmed');
-    const workflow = previous?.plan.workflow || {mode: 'direct' as const, issueHistory: true, ...(source.issue ? {issue: source.issue.number} : {}),
-      baseHead: await git.run(['rev-parse', `refs/remotes/origin/${project.mainBranch}`]),
-      permissions: {pushBranch: true, createPullRequest: true, closeIssueOnMerge: true}, context: knowledgeSnapshot(root)};
+    // New tasks are sliced unless the owner asks for one direct PR; feedback keeps the workflow it was approved with.
+    const mode = this.options.workflow || (process.env.EASY_SKILLS_WORKFLOW === 'direct' ? 'direct' : 'slices');
+    const bound = {...(source.issue ? {issue: source.issue.number} : {}), baseHead: await git.run(['rev-parse', `refs/remotes/origin/${project.mainBranch}`]), context: knowledgeSnapshot(root)};
+    const workflow: Workflow = previous?.plan.workflow || (mode === 'direct'
+      ? {mode, issueHistory: true, ...bound, permissions: {pushBranch: true, createPullRequest: true, closeIssueOnMerge: true}}
+      : {mode, issueHistory: true, ...bound, permissions: {pushBranch: true, createPullRequest: true, closeIssueOnMerge: true, mergeSlices: true}});
     let featureId = previous?.plan.featureId || (source.issue ? 'issue-' + source.issue.number : this.store.operation<string>(key + ':feature-id'));
     if (!featureId) {featureId = 'task-' + randomUUID().slice(0, 8); this.store.recordOperation(key + ':feature-id', key, 'task.identified', featureId);}
     this.showStage('PLAN', 'current');
@@ -430,6 +433,7 @@ export class Guided {
     return plan;
   }
   async approve(root: string, plan: Plan, previous?: Run): Promise<Run> {
+    if (plan.workflow?.mode === 'slices') return this.approveSlices(root, plan, previous);
     this.ui.say(`Task ready: ${plan.title}\n\nImplementation:\n${plan.tasks.map(t => '- ' + t.title + '\n  ' + t.description + '\n  Acceptance: ' + t.acceptance.join('; ')).join('\n')}\n\n` +
       `Required setup and checks:\n${JSON.stringify({setup: plan.project.setup || [], checks: plan.project.checks}, null, 2)}\n` +
       `Rules revision: ${plan.rulesAgreement?.version}\nIssue: ${plan.workflow?.issue ? '#' + plan.workflow.issue + ' (reuse existing)' : plan.workflow?.issueHistory ? 'create before BUILD' : 'none (no Issue will be created)'}\n` +
@@ -440,6 +444,26 @@ export class Guided {
       `Repair limit: ${plan.repairPolicy?.maxCompletedAttempts} completed corrective attempts. Final merge: manual; no merge authorized.\n` +
       `Scope: ${JSON.stringify(plan.tasks[0]?.scope || 'the displayed specification and acceptance criteria')}\n` +
       Stage.options.map(stage => `${stage.padEnd(7)} ${plan.assignments[stage].provider}  ${plan.assignments[stage].model}  effort: ${plan.assignments[stage].effort || 'CLI default (not pinned)'}`).join('\n'));
+    return this.start(root, plan, previous);
+  }
+  /** The owner approves the whole sliced feature once; nothing between this approval and the final PR asks the owner again. */
+  private async approveSlices(root: string, plan: Plan, previous?: Run): Promise<Run> {
+    const workflow = plan.workflow as Extract<Workflow, {mode: 'slices'}>;
+    const done = new Set(previous?.tasks.filter(t => t.integrated).map(t => t.id));
+    this.ui.say(`Feature ready: ${plan.title}\n\nSlices in order (${plan.tasks.length}):\n${plan.tasks.map((t, i) => `${i + 1}. ${t.title}${done.has(t.id) ? ' (already merged)' : ''}${t.dependsOn.length ? ' (after ' + t.dependsOn.join(', ') + ')' : ''}\n   ${t.description}\n   Acceptance: ${t.acceptance.join('; ')}\n   Scope: ${JSON.stringify(t.scope?.paths)}`).join('\n')}\n\n` +
+      `Required setup and checks:\n${JSON.stringify({setup: plan.project.setup || [], checks: plan.project.checks}, null, 2)}\n` +
+      `Rules revision: ${plan.rulesAgreement?.version}\n` +
+      `GitHub: a milestone "${plan.title}", ${workflow.issue ? 'the existing Issue #' + workflow.issue : 'a parent Issue'} and ${plan.tasks.length - done.size} slice Issue(s), created as the signed-in account, assigned to it, with matching repository labels.\n` +
+      `Branch: ${previous?.branch || 'feature/' + plan.featureId}. Each slice is built in its own branch, checked, verified and reviewed, then gets its own PR into that branch with "Fixes #<slice Issue>".\n` +
+      `Slice merges: ${workflow.permissions.mergeSlices ? 'automatic; the runner merges each reviewed slice PR into the feature branch itself and then closes its Issue' : 'not authorized'}.\n` +
+      `Failures: a failing check or review of a slice publishes a bug Issue, the agent repairs it, and the bug Issue closes when the repaired slice is merged.\n` +
+      `Final PR: ${previous?.finalPr?.url || 'one PR from the feature branch to ' + plan.project.mainBranch + ' listing every slice and bug Issue'}, after whole-feature checks, VERIFY and REVIEW. Final merge to ${plan.project.mainBranch}: manual by you; never automatic.\n` +
+      `Permissions: modify code only in each slice's displayed scope; run the displayed setup and checks; push the feature and slice branches; create and update their PRs; merge slice PRs into the feature branch.\n` +
+      `Repair limit: ${plan.repairPolicy?.maxCompletedAttempts} completed corrective attempts per slice and for the whole feature.\n` +
+      Stage.options.map(stage => `${stage.padEnd(7)} ${plan.assignments[stage].provider}  ${plan.assignments[stage].model}  effort: ${plan.assignments[stage].effort || 'CLI default (not pinned)'}`).join('\n'));
+    return this.start(root, plan, previous);
+  }
+  private async start(root: string, plan: Plan, previous?: Run): Promise<Run> {
     if (!await this.ui.confirm('task:approve', previous ? 'Approve this revised plan and update the existing PR?' : 'Start autonomous development with exactly this plan and these permissions?', hash(plan)))
       throw new Error('Execution was not approved; no branch, Issue or PR was created. To discuss corrections, use run TASK --refine "your correction".');
     const identity = await new Git(root).identity(), engine = new Engine(this.store, {client: this.client, github: this.options.github});

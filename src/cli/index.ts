@@ -40,11 +40,11 @@ async function withStore<T>(fn: (store: Store) => Promise<T> | T) {
   try {return await fn(store);} finally {store.close();}
 }
 function cwd() {return realpathSync.native(program.opts().project);}
-async function guided<T>(opts: {answers?: string; nonInteractive?: boolean}, fn: (wizard: Guided, store: Store, ui: TerminalInteraction) => Promise<T>) {
+async function guided<T>(opts: {answers?: string; nonInteractive?: boolean; direct?: boolean}, fn: (wizard: Guided, store: Store, ui: TerminalInteraction) => Promise<T>) {
   const identity = await new Git(cwd()).identity();
   program.setOptionValue('project', identity.root);
   const ui = new TerminalInteraction(opts);
-  try {return await withStore(store => fn(new Guided(store, ui), store, ui));} finally {ui.close();}
+  try {return await withStore(store => fn(new Guided(store, ui, opts.direct ? {workflow: 'direct'} : {}), store, ui));} finally {ui.close();}
 }
 const style = () => ({color: useColor(process.stdout.isTTY), unicode: !!process.stdout.isTTY && useUnicode()});
 function summary(run: import('../contracts.js').Run) {return describeRun(run, style());}
@@ -113,6 +113,7 @@ program.command('rules [change]').description('Review or conversationally update
   }));
 program.command('run <task>').description('Discuss an Issue, local specification or task, then develop through a reviewed PR')
   .option('--refine <text>', 'Discuss corrections to an unapproved proposal for this same task')
+  .option('--direct', 'Deliver one task in one PR instead of slices merged into a feature branch (or set EASY_SKILLS_WORKFLOW=direct)')
   .option('--answers <json>').option('--non-interactive').option('--foreground', 'Run one pass in this terminal')
   .action(async (task, opts) => guided(opts, async (wizard, store, ui) => {
     const issueUrl = task.match(/^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/issues\/(\d+)\/?(?:#.*)?$/i);

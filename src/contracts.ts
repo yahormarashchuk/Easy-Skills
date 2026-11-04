@@ -46,13 +46,26 @@ export const Task = z.object({
 }).strict();
 export type Task = z.infer<typeof Task>;
 // Optional on legacy plans: adding this field must never rewrite an old approval.
+const WorkflowContext = z.record(z.string().regex(/^\.easy-skills\/(?:rules\/[^:]+|context\/[^:]+|project\.yaml|decisions\/onboarding\.json)$/)
+  .refine(p => !p.includes('..') && !p.includes('\\')), z.string());
 export const DirectWorkflow = z.object({mode: z.literal('direct'), issue: z.number().int().positive().optional(),
   issueHistory: z.boolean().optional(),
   baseHead: z.string().regex(/^[a-f0-9]{40,64}$/),
   permissions: z.object({pushBranch: z.boolean(), createPullRequest: z.boolean(), closeIssueOnMerge: z.boolean()}).strict(),
-  context: z.record(z.string().regex(/^\.easy-skills\/(?:rules\/[^:]+|context\/[^:]+|project\.yaml|decisions\/onboarding\.json)$/)
-    .refine(p => !p.includes('..') && !p.includes('\\')), z.string()),
+  context: WorkflowContext,
 }).strict();
+/**
+ * One feature as dependent slices: a milestone, a parent Issue and one Issue and PR per slice. `mergeSlices` lets the
+ * runner merge a slice PR into the feature branch on its own approved checks and REVIEW; the PR to main stays manual.
+ */
+export const SlicesWorkflow = z.object({mode: z.literal('slices'), issue: z.number().int().positive().optional(),
+  issueHistory: z.literal(true),
+  baseHead: z.string().regex(/^[a-f0-9]{40,64}$/),
+  permissions: z.object({pushBranch: z.boolean(), createPullRequest: z.boolean(), closeIssueOnMerge: z.boolean(), mergeSlices: z.boolean()}).strict(),
+  context: WorkflowContext,
+}).strict();
+export const Workflow = z.discriminatedUnion('mode', [DirectWorkflow, SlicesWorkflow]);
+export type Workflow = z.infer<typeof Workflow>;
 export const Plan = z.object({
   schemaVersion: z.union([z.literal(1), z.literal(2)]), featureId: Identifier, title: z.string().min(1),
   spec: z.string().min(1), project: Project, assignments: Assignments,
@@ -63,12 +76,17 @@ export const Plan = z.object({
   protectedInputs: z.record(z.string(), z.string().nullable()).optional(),
   permissions: z.object({publishIssues: z.boolean(), mergeIntermediate: z.boolean()}).strict(),
   verification: z.object({diagnostics: z.array(Identifier), browserTools: z.array(z.string().regex(/^mcp__[\w-]+__[\w-]+$/))}).strict().optional(),
-  workflow: DirectWorkflow.optional(),
+  workflow: Workflow.optional(),
 }).strict().superRefine((plan, ctx) => {
-  if (plan.workflow && (plan.tasks.length !== 1 || plan.tasks[0]?.dependsOn.length || plan.permissions.mergeIntermediate || plan.permissions.publishIssues))
+  if (plan.workflow?.mode === 'direct' && (plan.tasks.length !== 1 || plan.tasks[0]?.dependsOn.length || plan.permissions.mergeIntermediate || plan.permissions.publishIssues))
     ctx.addIssue({code: 'custom', message: 'Direct tasks require one independent task, use workflow.issueHistory for Issue publication and prohibit intermediate merges'});
-  if (plan.workflow && !plan.tasks[0]?.scope?.paths.length)
+  if (plan.workflow?.mode === 'direct' && !plan.tasks[0]?.scope?.paths.length)
     ctx.addIssue({code: 'custom', message: 'Direct tasks require explicit implementation and test scope paths'});
+  // Slices publish through workflow.issueHistory and merge only through workflow.permissions.mergeSlices, never the advanced grants.
+  if (plan.workflow?.mode === 'slices' && (plan.permissions.mergeIntermediate || plan.permissions.publishIssues))
+    ctx.addIssue({code: 'custom', message: 'Sliced features publish through workflow.issueHistory and merge slices only through workflow.permissions.mergeSlices'});
+  if (plan.workflow?.mode === 'slices' && plan.tasks.some(t => !t.scope?.paths.length))
+    ctx.addIssue({code: 'custom', message: 'Every slice requires explicit implementation and test scope paths'});
   if (plan.schemaVersion === 2 && (!plan.repairPolicy || !plan.protectedInputs || plan.project.schemaVersion !== 2))
     ctx.addIssue({code: 'custom', message: 'Plan v2 requires project v2, an explicit repair policy and protected verification manifest'});
   const ids = new Set(plan.tasks.map(t => t.id));

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { Plan, Stage } from '../contracts.js';
+import type { Plan, Stage, Task } from '../contracts.js';
 import { hash } from '../util.js';
 
 /** Decisions one run may hand to the delegate; beyond this the owner is asked. */
@@ -16,17 +16,18 @@ export type DelegateReply = z.infer<typeof DelegateReply>;
 /** An answer that tells the agent to do any of these always goes to the owner, whatever the delegate says. */
 const FORBIDDEN_ANSWER = /(?:--no-verify|--no-gpg-sign|--force\b|force[- ]push|push (?:to|directly to) main|merge (?:the|this) (?:pr|pull request)|bypass|disable (?:the )?(?:guard|check|checks|sandbox|hook|hooks|review)|skip (?:the )?(?:checks?|tests?|review|verify)|rm -rf|drop (?:database|table|schema)|delete (?:the )?backup)/i;
 
-export function delegatePrompt(plan: Plan, stage: Stage, taskTitle: string | undefined, question: string, summary: string, findings: string[], previous: string[]): string {
-  const task = plan.tasks[0];
+export function delegatePrompt(plan: Plan, stage: Stage, task: Task | undefined, question: string, summary: string, findings: string[], previous: string[]): string {
+  // A slice question is judged against that slice's paths; a whole-feature question against every approved path.
+  const paths = task ? task.scope?.paths || [] : [...new Set(plan.tasks.flatMap(t => t.scope?.paths || []))];
   return `You are the owner's delegate for an autonomous engineering run. The ${stage} agent stopped with a question and nobody is available to answer it. Decide it yourself when that is safe, otherwise escalate it to the owner. This is a READ-ONLY session: do not edit files or run commands that change anything.
 
-Approved task: ${taskTitle || plan.title}
-Specification, acceptance criteria and exclusions:
+Approved task: ${task?.title || plan.title}
+${task && plan.tasks.length > 1 ? `Slice description: ${task.description}\nSlice acceptance: ${JSON.stringify(task.acceptance)}\n` : ''}Specification, acceptance criteria and exclusions:
 ${plan.spec}
 
-Approved scope paths: ${JSON.stringify(task?.scope?.paths || [])}
+Approved scope paths: ${JSON.stringify(paths)}
 Approved checks: ${JSON.stringify(plan.project.checks.map(check => check.id))}
-Permissions: ${JSON.stringify(plan.permissions)}
+Permissions: ${JSON.stringify(plan.workflow?.mode === 'slices' ? {...plan.permissions, ...plan.workflow.permissions} : plan.permissions)}
 
 The agent's report:
 Summary: ${summary}

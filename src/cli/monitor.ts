@@ -20,6 +20,8 @@ export const reference = (run: Run) => run.plan.workflow?.issue ? '#' + run.plan
 
 export function summary(run: Run, style: Style) {
   return `${run.plan.workflow?.issue ? 'Task #' + run.plan.workflow.issue : run.plan.title}: ${run.status}\n` +
+    (run.plan.workflow?.mode === 'slices' ? `Slices merged into ${run.branch}: ${run.tasks.filter(t => t.integrated).length}/${run.tasks.length}` +
+      (run.tasks.find(t => !t.integrated) ? `; current slice: ${run.tasks.find(t => !t.integrated)!.id}` : '') + '\n' : '') +
     (run.status === 'ready' ? `Ready for review: ${run.finalPr?.url}\nChecks: passed at ${run.finalReviewHead}\nReview: passed. Final merge: manual.` : stageBanner(stageOf(run), 'current', style.color, style.unicode)) +
     (run.reason ? '\n' + run.reason : '') + (run.pendingDecision ? '\nDecision: ' + run.pendingDecision.question : '') +
     (nextStep(run) ? '\n\n' + (attention.includes(run.status) ? '>>> YOUR ACTION: ' : 'Next: ') + nextStep(run) : '');
