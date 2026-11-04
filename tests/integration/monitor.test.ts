@@ -17,6 +17,33 @@ test('activity reads like progress, not process bookkeeping', () => {
   assert.equal(ago(new Date(0).toISOString(), 90_000), '1m ago');
 });
 
+test('delegated and escalated decisions are visible in the activity', () => {
+  assert.equal(describe('decision.delegated', {stage: 'BUILD', question: 'Which path?'}), 'The delegate answered a BUILD question without you: Which path?');
+  assert.equal(describe('decision.escalated', {}), 'The delegate left a question to you');
+  assert.match(describe('decision.requested', {})!, /^Your decision is needed/);
+});
+
+test('a long question is wrapped, not cut, and stays on screen with the command that answers it', async () => {
+  const f = await fixture();
+  try {
+    const question = 'Runner: is CHECKIN_LEGACY_TEST_DATABASE_URL available in your environment? If it is not, the Slice 0 verification cannot complete, and the owner needs to provision the disposable synthetic PostgreSQL database for it.';
+    const run = f.engine.approve(f.run.id, f.run.planHash); run.status = 'needs_decision'; run.reason = 'Verification stays blocked on runner configuration: ' + 'detail '.repeat(30);
+    run.pendingDecision = {id: '0b0b0b0b-0b0b-4b0b-8b0b-0b0b0b0b0b0b', planHash: run.planHash, head: 'a'.repeat(40), stage: 'BUILD', question};
+    f.store.save(run, 'fixture.waiting');
+    for (let i = 0; i < 12; i++) f.store.save(run, 'check.started', {check: 'check-' + i, baseline: false});
+    const view = screen(), controller = new AbortController();
+    view.out.columns = 50; view.out.rows = 30;
+    const watching = watchRun(f.store, run.id, {style, out: view.out, intervalMs: 20, signal: controller.signal});
+    setTimeout(() => controller.abort(), 80);
+    await watching;
+    const text = view.chunks.join('').replace(/\u001b\[[0-9;]*[A-Za-z]/g, '').replace(/\s+/g, ' ');
+    assert.ok(text.includes(question.replace(/\s+/g, ' ')), 'the whole question is shown');
+    assert.ok(text.includes('YOUR ACTION: easy-skills answer'));
+    assert.ok(!text.includes('...'), 'nothing is cut with an ellipsis');
+    for (const chunk of view.chunks) for (const line of chunk.replace(/\u001b\[[0-9;]*[A-Za-z]/g, '').split(/[\r\n]+/)) assert.ok(line.length <= 49 || line.startsWith('Stopped watching'), line);
+  } finally {await f.dispose();}
+});
+
 test('the task table lists every task with the ID status accepts, those waiting for the owner first', async () => {
   const f = await fixture();
   try {

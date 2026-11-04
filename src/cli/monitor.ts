@@ -63,7 +63,9 @@ export function describe(type: string, data: Record<string, any>): string | unde
     case 'feature.ready': return 'Pull request ready' + (data.pr?.url ? ': ' + data.pr.url : '');
     case 'task.repair': case 'feature.repair': return `Repair attempt ${data.count}${data.reason ? ': ' + data.reason : ''}`;
     case 'run.suspended': return 'Stopped: ' + (data.reason || data.status || 'see status');
-    case 'decision.requested': return 'Your decision is needed';
+    case 'decision.requested': return 'Your decision is needed: see the question and the command above';
+    case 'decision.delegated': return `The delegate answered a ${data.stage || ''} question without you: ${data.question || ''}`.trim();
+    case 'decision.escalated': return 'The delegate left a question to you';
     case 'setup.child.exited': case 'client.session': case 'control.applied': case 'control.requested': case 'draft.created': return undefined;
     default: return type.replace(/[._]/g, ' ');
   }
@@ -95,14 +97,30 @@ class Screen {
   constructor(private readonly out: Output) {}
   draw(text: string) {
     const width = Math.max(20, (this.out.columns || 100) - 1), height = Math.max(5, (this.out.rows || 40) - 1);
-    // Lines must never wrap or exceed the window, or moving the cursor up would not reach the top of the block.
-    const lines = text.split('\n').map(line => visible(line) <= width ? line : line.slice(0, width - 3) + '...').slice(-height);
+    // Lines must never wrap or exceed the window, or moving the cursor up would not reach the top of the block. A long plain
+    // line (a reason, a question) is split into several lines instead of cut: the owner needs all of it to decide.
+    const fit = (block: string) => block.split('\n').flatMap(line => visible(line) <= width ? [line]
+      : line.includes('\u001b') ? [line.slice(0, width - 3) + '...'] : wrap(line, width));
+    // The status block with the owner's action stays on screen; only the oldest recent activity is dropped when the window is short.
+    const split = text.indexOf('\n\nRecent activity:'), head = fit(split < 0 ? text : text.slice(0, split)), tail = split < 0 ? [] : fit(text.slice(split));
+    const lines = head.length >= height ? head.slice(-height) : [...head, ...tail.slice(-(height - head.length))];
     this.out.write((this.drawn > 1 ? `\u001b[${this.drawn - 1}A` : '') + '\r' + lines.map(line => '\u001b[2K' + line).join('\n') + '\u001b[J');
     this.drawn = lines.length;
   }
   end(text = '') {this.out.write('\n' + (text ? text + '\n' : '')); this.drawn = 0;}
 }
 const visible = (line: string) => line.replace(/\u001b\[[0-9;]*m/g, '').length;
+/** Splits a plain line at spaces where possible, so no piece is longer than the window. */
+function wrap(line: string, width: number): string[] {
+  const pieces: string[] = [];
+  let rest = line;
+  while (rest.length > width) {
+    // Break at the last space so a word stays whole; only a word longer than the window is cut.
+    const cut = rest.lastIndexOf(' ', width), at = cut > 0 ? cut : width;
+    pieces.push(rest.slice(0, at).trimEnd()); rest = rest.slice(at).trimStart();
+  }
+  return [...pieces, rest.trimEnd()];
+}
 
 export interface WatchOptions {style: Style; out?: Output; intervalMs?: number; signal?: AbortSignal; now?: () => number}
 
