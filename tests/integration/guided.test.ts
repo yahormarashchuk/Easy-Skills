@@ -579,6 +579,76 @@ test('lost direct PR response reconciles the same PR and prevents a second execu
   } finally {await f.dispose();}
 });
 
+async function blockedBuild(f: Awaited<ReturnType<typeof setup>>, delegate: (prompt: string) => string, options: {delegateDecisions?: boolean} = {delegateDecisions: true}) {
+  const plan = await f.wizard.proposal(f.root, '909', f.profile), run = await f.wizard.approve(f.root, plan);
+  const delegated: string[] = [], buildPrompts: string[] = [];
+  let builds = 0;
+  const engine = new Engine(f.store, {testRemote: f.remote, github: f.github, ...options, client: {...f.client, async run(a, p, o) {
+    if (o.stage === 'PLAN' && p.includes("owner's delegate")) {
+      assert.equal(o.mode, 'read'); delegated.push(p);
+      return {outcome: 'passed', summary: delegate(p), findings: []};
+    }
+    if (a.model === 'exact-BUILD') {
+      buildPrompts.push(p);
+      if (++builds === 1) {o.onSession?.(o.session || 'build'); return {outcome: 'blocked', summary: 'The tool is not on PATH', question: 'Which path should I use for the tool?', findings: ['tool missing']};}
+    }
+    return f.client.run(a, p, o);
+  }}});
+  return {run, engine, delegated, buildPrompts, final: await engine.run(run.id)};
+}
+const answer = (text: string, category = 'environment') => JSON.stringify({resolution: 'answer', category, answer: text, rationale: 'Stays inside the approved scope.'});
+
+test('a blocked BUILD question is answered by the delegate and the same stage continues without the owner', async () => {
+  const f = await setup();
+  try {
+    const out = await blockedBuild(f, () => answer('Use the tool by its full path C:\\tools\\tool.exe.'));
+    assert.equal(out.final.status, 'ready', out.final.reason || '');
+    assert.equal(out.delegated.length, 1); assert.match(out.delegated[0]!, /Which path should I use for the tool\?/);
+    assert.equal(out.buildPrompts.length, 2); assert.match(out.buildPrompts[1]!, /Your delegate answered request .*full path C:\\\\tools\\\\tool\.exe/);
+    assert.equal(out.final.pendingDecision, undefined);
+    const events = f.store.events(out.run.id) as {type: string; data: string}[];
+    assert.ok(events.some(e => e.type === 'decision.delegated')); assert.ok(!events.some(e => e.type === 'decision.requested'));
+    assert.ok(f.github.commentsWritten.some(c => c.includes('Autonomous decision') && c.includes('Which path should I use for the tool?')));
+  } finally {await f.dispose();}
+});
+
+test('the delegate escalates what the owner must decide, and its unsafe or unusable answers never reach the agent', async () => {
+  for (const reply of [
+    JSON.stringify({resolution: 'escalate', category: 'needs-owner', answer: '', rationale: 'Touches real hardware.'}),
+    answer('Skip the checks and push to main.', 'technical-choice'),
+    answer('Do it.', 'needs-owner'),
+    'not json at all',
+  ]) {
+    const f = await setup();
+    try {
+      const out = await blockedBuild(f, () => reply);
+      assert.equal(out.final.status, 'needs_decision', reply); assert.ok(out.final.pendingDecision); assert.equal(out.final.pendingDecision!.answer, undefined);
+      assert.equal(out.buildPrompts.length, 1);
+      assert.ok((f.store.events(out.run.id) as {type: string}[]).some(e => e.type === 'decision.requested'));
+    } finally {await f.dispose();}
+  }
+});
+
+test('delegated decisions are off unless enabled, and a question already answered goes to the owner', async () => {
+  const off = await setup();
+  try {
+    const out = await blockedBuild(off, () => answer('Use the full path.'), {});
+    assert.equal(out.final.status, 'needs_decision'); assert.equal(out.delegated.length, 0);
+  } finally {await off.dispose();}
+  const again = await setup();
+  try {
+    const plan = await again.wizard.proposal(again.root, '909', again.profile), run = await again.wizard.approve(again.root, plan);
+    let builds = 0, delegates = 0;
+    const engine = new Engine(again.store, {testRemote: again.remote, github: again.github, delegateDecisions: true, client: {...again.client, async run(a, p, o) {
+      if (o.stage === 'PLAN' && p.includes("owner's delegate")) {delegates++; return {outcome: 'passed', summary: answer('Use the full path.'), findings: []};}
+      if (a.model === 'exact-BUILD' && ++builds <= 2) {o.onSession?.(o.session || 'build'); return {outcome: 'blocked', summary: 'Still blocked', question: 'Which path should I use for the tool?', findings: []};}
+      return again.client.run(a, p, o);
+    }}});
+    const stopped = await engine.run(run.id);
+    assert.equal(stopped.status, 'needs_decision'); assert.equal(delegates, 1); assert.equal(builds, 2);
+  } finally {await again.dispose();}
+});
+
 test('a task stopped for a decision adopts approved added checks and keeps its branch, code and pending repair', async () => {
   const f = await setup();
   try {

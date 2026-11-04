@@ -22,11 +22,14 @@ import { ownerAlive, processIdentity } from '../process-identity.js';
 import { ignoredOutputs } from './setup-outputs.js';
 import { publishRepairIssue, repairIssues, issueLabels, closeRepairIssues, allRepairs } from './issue-history.js';
 import { pullRequestBody, pullRequestTitle } from './pull-request.js';
+import { MAX_DELEGATE_DECISIONS, acceptDelegateReply, delegatePrompt } from './delegate.js';
 
 class Blocked extends Error {}
 /** Generated files whose full diff is too large to review line by line. */
 const GENERATED_FILE = /(?:\.Designer\.cs|ModelSnapshot\.cs|\.g\.cs|(?:^|\/)(?:package-lock\.json|yarn\.lock|pnpm-lock\.yaml|packages\.lock\.json))$/i;
-export interface EngineOptions {client?: Client; github?: GitHub; signal?: AbortSignal; testRemote?: string}
+export interface EngineOptions {client?: Client; github?: GitHub; signal?: AbortSignal; testRemote?: string; delegateDecisions?: boolean}
+/** Delegated decisions are on unless EASY_SKILLS_DELEGATE_DECISIONS=0, so BUILD to SHIP need no owner for questions the plan already settles. */
+export const delegateDecisionsEnabled = () => process.env.EASY_SKILLS_DELEGATE_DECISIONS !== '0';
 export class Engine {
   readonly client: Client;
   constructor(readonly store: Store, readonly options: EngineOptions = {}) {this.client = options.client || new CliClient();}
@@ -387,7 +390,37 @@ export class Engine {
     await this.guard(run, cwd); await git.clean(cwd);
     return committed;
   }
+  /**
+   * A stage that returns blocked with a question is answered by a read-only delegate on the PLAN model when the answer stays
+   * inside the approved plan; anything that would widen scope, rules, rights or touch real systems, and any question already
+   * answered once, still goes to the owner. Every delegated answer is recorded and, for a task with an Issue, commented on it.
+   */
+  private async delegate(run: Run, cwd: string, stage: Stage, task: Task | undefined, decision: NonNullable<Run['pendingDecision']>, result: StageResult) {
+    if (!this.options.delegateDecisions || !run.plan.workflow) return undefined;
+    const key = `${run.id}:delegate-decisions`, state = this.store.operation<{asked: string[]; questions: string[]}>(key) || {asked: [], questions: []};
+    if (state.asked.length >= MAX_DELEGATE_DECISIONS || state.asked.includes(hash(decision.question))) return undefined;
+    let reply;
+    try {
+      const raw = await this.client.run(run.plan.assignments.PLAN, delegatePrompt(run.plan, stage, task?.title, decision.question, result.summary, result.findings, state.questions), {
+        cwd, stage: 'PLAN', projectRoot: run.root, mode: 'read', signal: this.options.signal});
+      reply = raw.outcome === 'passed' ? acceptDelegateReply(raw.summary, state.asked, decision.question) : undefined;
+    } catch (error) {
+      if (this.options.signal?.aborted) throw error;
+      return undefined;
+    }
+    this.store.recordOperation(key, run.id, 'delegate.asked', {asked: [...state.asked, hash(decision.question)], questions: [...state.questions, redact(decision.question).slice(0, 300)]});
+    if (!reply) {this.store.event(run.id, 'decision.escalated', {request: decision.id, stage, task: task?.id}); return undefined;}
+    this.store.event(run.id, 'decision.delegated', {request: decision.id, stage, task: task?.id, category: reply.category, question: redact(decision.question), answer: redact(reply.answer), rationale: redact(reply.rationale)});
+    if (run.parentIssue) {
+      try {
+        const github = this.options.github || new Gh(run.plan.project.repository, run.root);
+        await github.commentOnce(run.parentIssue, 'delegate:' + decision.id, redact(`Autonomous decision (no owner was asked) during ${stage}.\n\nQuestion: ${decision.question}\n\nAnswer: ${reply.answer}\n\nWhy it stays inside the approved plan: ${reply.rationale}`));
+      } catch { /* the record in the run history stands */ }
+    }
+    return reply;
+  }
   private async agent(run: Run, stage: Stage, cwd: string, taskState?: TaskState, task?: Task, extra = '', skill?: string, collectReview = true): Promise<StageResult> {
+    const entryExtra = extra;
     this.checkpoint(run);
     await this.guard(run, cwd);
     await requireCompatibility(this.store, this.client, run.plan.assignments[stage], cwd);
@@ -454,7 +487,9 @@ export class Engine {
     if (question && question.stage === stage && question.taskId === task?.id) {
       if (!question.answer) throw new Blocked('Awaiting answer to decision request ' + question.id);
       if (question.planHash !== run.planHash || question.head !== await new Git(cwd).head(cwd)) throw new Blocked('Decision answer is stale after plan or revision change');
-      extra += `\nHuman response to request ${question.id}: ${JSON.stringify({question: question.question, answer: question.answer})}. Treat as clarification within the approved scope, never permission to expand rules, models, checks, publication or merge rights.`;
+      extra += question.source === 'delegate'
+        ? `\nThe owner is not available. Your delegate answered request ${question.id}: ${JSON.stringify({question: question.question, answer: question.answer})}. Treat as clarification within the approved scope, never permission to expand rules, models, checks, publication or merge rights.`
+        : `\nHuman response to request ${question.id}: ${JSON.stringify({question: question.question, answer: question.answer})}. Treat as clarification within the approved scope, never permission to expand rules, models, checks, publication or merge rights.`;
     }
     const sessions = taskState ? taskState.sessions : run.finalSessions;
     const contextKey = `${run.id}:context:${task?.id || 'feature'}:${stage}`;
@@ -496,6 +531,12 @@ export class Engine {
       if (result.outcome === 'blocked') {
         run.pendingDecision = {id: randomUUID(), planHash: run.planHash, head: await new Git(cwd).head(cwd), stage, taskId: task?.id,
           question: result.question || result.summary};
+        const delegated = await this.delegate(run, cwd, stage, task, run.pendingDecision, result);
+        if (delegated) {
+          run.pendingDecision = {...run.pendingDecision, answer: delegated.answer, source: 'delegate'};
+          this.store.save(run, 'decision.answered', {request: run.pendingDecision.id, delegate: true});
+          return this.agent(run, stage, cwd, taskState, task, entryExtra, skill, false);
+        }
         this.store.save(run, 'decision.requested', {request: run.pendingDecision.id, stage, task: task?.id});
         if (run.parentIssue && !run.plan.workflow) {
           const github = this.options.github || new Gh(run.plan.project.repository, run.root);

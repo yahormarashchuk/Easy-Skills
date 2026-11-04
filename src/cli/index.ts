@@ -9,7 +9,7 @@ import { spawn } from 'node:child_process';
 import { parse } from 'yaml';
 import { Assignment, Plan, VERSION } from '../contracts.js';
 import { Store } from '../persistence/store.js';
-import { Engine } from '../runner/engine.js';
+import { Engine, delegateDecisionsEnabled } from '../runner/engine.js';
 import { worker } from '../runner/worker.js';
 import { CliClient } from '../adapters/index.js';
 import { Git } from '../git/index.js';
@@ -124,7 +124,7 @@ program.command('run <task>').description('Discuss an Issue, local specification
     const profile = await wizard.profile(cwd()); await wizard.compatibility(cwd(), profile);
     await wizard.onboard(cwd(), profile);
     const plan = await wizard.proposal(cwd(), task, profile, undefined, opts.refine), run = await wizard.approve(cwd(), plan);
-    if (opts.foreground) {ui.say(summary(await new Engine(store).run(run.id))); return;}
+    if (opts.foreground) {ui.say(summary(await new Engine(store, {delegateDecisions: delegateDecisionsEnabled()}).run(run.id))); return;}
     await start(store, run.id);
     ui.say(`Autonomous development started as ${run.plan.featureId}. Use easy-skills status ${run.plan.featureId} to follow progress and easy-skills resume after an interruption.`);
     return run.id;
@@ -136,7 +136,7 @@ program.command('revise <task> <feedback>').description('Review a revised plan a
     if (previous.status !== 'ready' || !previous.plan.workflow) throw new Error('revise changes a task whose pull request is ready. For a stopped task use easy-skills resume, or easy-skills adopt-config to add checks, raise the repair limit or publish Issue history');
     const profile = await wizard.profile(cwd()); await wizard.compatibility(cwd(), profile);
     const plan = await wizard.proposal(cwd(), feedback, profile, previous), run = await wizard.approve(cwd(), plan, previous);
-    if (opts.foreground) {ui.say(summary(await new Engine(store).run(run.id))); return;}
+    if (opts.foreground) {ui.say(summary(await new Engine(store, {delegateDecisions: delegateDecisionsEnabled()}).run(run.id))); return;}
     await start(store, run.id); ui.say('Applying approved feedback on the existing branch and PR. Use easy-skills status for progress.');
     return run.id;
   }).then(id => id && live(opts) ? follow(id) : undefined));
@@ -223,7 +223,7 @@ feature.command('draft').requiredOption('--file <yaml>', 'Complete plan YAML').a
 feature.command('approve <id>').requiredOption('--hash <sha256>', 'Exact reviewed plan hash')
   .action(async (id, opts) => withStore(store => output(new Engine(store).approve(id, opts.hash))));
 program.command('start <id>').option('--foreground', 'Run one execution pass attached to this terminal')
-  .action(async (id, opts) => withStore(async store => output(opts.foreground ? await new Engine(store).run(id) : await start(store, id))));
+  .action(async (id, opts) => withStore(async store => output(opts.foreground ? await new Engine(store, {delegateDecisions: delegateDecisionsEnabled()}).run(id) : await start(store, id))));
 program.command('resume [id]').description('Resume the latest task, Issue number, or run ID with exact recorded sessions')
   .action(async reference => withStore(async store => {
     const run = reference && /^[a-f0-9-]{36}$/.test(reference) ? store.get(reference) : resolveRun(store, (await new Git(cwd()).identity()).root, reference), id = run.id;
