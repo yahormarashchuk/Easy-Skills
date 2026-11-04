@@ -11,6 +11,21 @@ export function canonical(value: unknown): string {
 }
 export const hash = (value: unknown) => createHash('sha256').update(canonical(value)).digest('hex');
 export const now = () => new Date().toISOString();
+/**
+ * Whether a repository-relative POSIX path is inside one of the approved scope paths. A scope path is a file, a directory
+ * (with or without a trailing slash) or a glob: `**` crosses directories, `*` and `?` stay inside one directory. A glob is
+ * also a directory prefix, so `src/Check*` covers everything below a matching directory.
+ */
+export function inScope(path: string, scopes: readonly string[]): boolean {
+  return scopes.some(scope => {
+    const allowed = scope.replace(/\/+$/, '');
+    if (allowed === '.' || allowed === '**') return true;
+    if (!/[*?]/.test(allowed)) return path === allowed || path.startsWith(allowed + '/');
+    const source = allowed.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*\*\//g, '\u0000').replace(/\*\*/g, '\u0001').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]')
+      .replace(/\u0000/g, '(?:.*/)?').replace(/\u0001/g, '.*');
+    return new RegExp('^' + source + '(?:/.*)?$').test(path);
+  });
+}
 export function stateHome(): string {
   return resolve(process.env.EASY_SKILLS_HOME || join(process.env.LOCALAPPDATA || join(homedir(), '.local', 'share'), 'EasySkills'));
 }
