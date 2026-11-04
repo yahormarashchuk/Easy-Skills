@@ -19,8 +19,13 @@ export const FeatureRequest = z.object({featureId: Identifier, title: z.string()
   verification: z.object({diagnostics: z.array(Identifier), browserTools: z.array(z.string().regex(/^mcp__[\w-]+__[\w-]+$/))}).strict().optional(),
   workflow: DirectWorkflow.optional(),
   repairPolicy: z.object({maxCompletedAttempts: z.number().int().min(0).max(100)}).strict().default({maxCompletedAttempts: DEFAULT_REPAIR_ATTEMPTS})}).strict();
+export type PlanDecision = {question: string; answer: string};
+/** PLAN stopped on a decision only the owner can make; the caller asks it and plans again with the answer. */
+export class PlanDecisionNeeded extends Error {
+  constructor(readonly summary: string, readonly question: string) {super('PLAN needs an owner decision: ' + summary + '\nQuestion: ' + question);}
+}
 /** Read-only planning uses the assigned PLAN model, before approval or publication. */
-export async function generatePlan(store: Store, root: string, input: unknown, client: Client = new CliClient(), previous?: {worktree: string; plan: Plan; head: string}, cacheDraft = false, onLine?: (line: string) => void) {
+export async function generatePlan(store: Store, root: string, input: unknown, client: Client = new CliClient(), previous?: {worktree: string; plan: Plan; head: string}, cacheDraft = false, onLine?: (line: string) => void, decisions: PlanDecision[] = []) {
   const request = FeatureRequest.parse(input), project = loadProject(root), identity = await new Git(root).identity();
   await requireCompatibility(store, client, request.assignments.PLAN, root);
   if (project.schemaVersion !== 2) throw new Error('Project v2 setup/protected-input configuration must be reviewed before new plans');
@@ -40,7 +45,8 @@ ${previous ? `You are in the existing task worktree at reviewed revision ${previ
 Build a complete Plan JSON object from this seed, replacing its placeholder tasks with small sequentially executable slices:
 ${JSON.stringify(seed)}
 ${seed.workflow ? 'Direct mode: return exactly ONE independent task, with explicit repository-relative scope.paths covering implementation and regression tests. Inspect the bound workflow.baseHead with read-only git show if the source checkout differs. Do not switch branches or decompose into intermediate Issues or PRs.' : 'Advanced feature mode: decompose only when meaningful dependencies require it.'}
-Every task needs scope with both areas (an array of identifiers, [] when none apply) and paths. Preserve specification, project, exact assignments, permissions, rules hash and package versions. Return the complete plan serialized as a JSON string in planJson of the structured result. No approval is implied.`);
+Every task needs scope with both areas (an array of identifiers, [] when none apply) and paths. Preserve specification, project, exact assignments, permissions, rules hash and package versions. Return the complete plan serialized as a JSON string in planJson of the structured result. No approval is implied.` +
+      (decisions.length ? `\nOwner decisions on questions you asked earlier (final; apply them in the plan and never ask them again): ${JSON.stringify(decisions)}` : ''));
     const cached = cacheDraft ? store.operation<Plan>(key + ':draft') : undefined;
     const ask = (text: string, session?: string) => client.run(request.assignments.PLAN, text, {cwd: previous?.worktree || identity.root, projectRoot: identity.root, mode: 'read', stage: 'PLAN', session, onLine,
       onSpawn: pid => store.recordOperation(key, run.id, 'planning.session', {...store.operation<object>(key), pid, identity: processIdentity(pid)}),
@@ -53,6 +59,7 @@ Every task needs scope with both areas (an array of identifiers, [] when none ap
       return ask(`Your structured result failed validation: ${error.reason}. Return the complete corrected result in the same structured format, with the complete plan in planJson. Change only what is needed to pass validation.`, session);
     };
     const result = cached ? {outcome: 'passed', plan: cached, summary: 'Saved unapproved technical plan'} : await ask(prompt, saved?.session).catch(corrected);
+    if (result.outcome === 'blocked' && 'question' in result && result.question) throw new PlanDecisionNeeded(result.summary, result.question);
     if (result.outcome !== 'passed' || !result.plan) throw new Error('PLAN did not return a complete validated plan: ' + result.summary);
     const plan = Plan.parse(result.plan);
     for (const field of ['schemaVersion', 'featureId', 'title', 'spec', 'project', 'assignments', 'permissions', 'verification', 'workflow', 'repairPolicy', 'protectedInputs', 'rulesHash', 'rulesAgreement', 'runnerVersion', 'skillsVersion'] as const)

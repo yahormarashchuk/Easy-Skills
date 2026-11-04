@@ -350,6 +350,34 @@ test('scripted approvals bind the displayed proposal and reject a prefilled bool
   } finally {await f.dispose();}
 });
 
+test('a PLAN decision is asked once and answered in the same session; a repeated question stops instead of looping', async () => {
+  const f = await setup();
+  try {
+    const question = 'May the plan add a journal table to the legacy database?';
+    const planPrompts: {prompt: string; session?: string}[] = [];
+    const client: Client = {...f.client, async run(a, prompt, options) {
+      if (options.stage !== 'PLAN') return f.client.run(a, prompt, options);
+      planPrompts.push({prompt, session: options.session});
+      if (planPrompts.length === 1) {options.onSession?.('planning-session'); return {outcome: 'blocked', summary: 'One persistence decision is needed', question, findings: []};}
+      return f.client.run(a, prompt, options);
+    }};
+    const wizard = new Guided(f.store, f.ui, {client, github: f.github, testRemote: f.remote});
+    const id = 'interview:plan-decision-' + hash(question).slice(0, 12);
+    f.ui.values[id] = 'Yes, additive only.';
+    const plan = await wizard.proposal(f.root, 'Fix names with focused tests', f.profile);
+    assert.equal(plan.tasks.length, 1);
+    assert.equal(f.ui.questions.filter(q => q === id).length, 1);
+    assert.ok(f.ui.messages.some(m => m.includes('PLAN needs your decision: One persistence decision is needed')));
+    assert.equal(planPrompts.length, 2); assert.equal(planPrompts[1]!.session, 'planning-session');
+    assert.ok(planPrompts[1]!.prompt.includes('Yes, additive only.'));
+    const repeated = new Guided(f.store, f.ui, {client: {...client, async run(a, prompt, options) {
+      if (options.stage === 'PLAN') return {outcome: 'blocked', summary: 'Still unsure', question, findings: []};
+      return client.run(a, prompt, options);
+    }}, github: f.github, testRemote: f.remote});
+    await assert.rejects(repeated.proposal(f.root, 'Fix names in either order', f.profile), /PLAN asked again a decision you already answered/);
+  } finally {await f.dispose();}
+});
+
 test('unapproved text-task drafts keep their exact identity and plan across a review interruption', async () => {
   const f = await setup();
   try {
