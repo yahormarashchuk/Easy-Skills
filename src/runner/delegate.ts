@@ -84,19 +84,22 @@ export function narrowingRejected(remove: number[], acceptance: string[], amendm
   return undefined;
 }
 
-/** The plan an amendment produces: only the named criteria of one task disappear. */
-export function narrowedPlan(plan: Plan, taskId: string, remove: number[]): Plan {
-  return Plan.parse({...plan, tasks: plan.tasks.map(t => t.id === taskId ? {...t, acceptance: t.acceptance.filter((_, index) => !remove.includes(index))} : t)});
+/** The plan an amendment produces: the named criteria of one task disappear, and only the owner may also give that task a shorter description. */
+export function narrowedPlan(plan: Plan, taskId: string, remove: number[], description?: string): Plan {
+  return Plan.parse({...plan, tasks: plan.tasks.map(t => t.id === taskId ? {...t, acceptance: t.acceptance.filter((_, index) => !remove.includes(index)), ...(description === undefined ? {} : {description})} : t)});
 }
 
-/** Proof, independent of how the amended plan was built, that nothing but the named criteria of one task changed. */
-export function narrowingViolation(before: Plan, after: Plan, taskId: string, remove: number[]): string | undefined {
+/** Proof, independent of how the amended plan was built, that nothing but the named criteria (and a shorter description, when given) of one task changed. */
+export function narrowingViolation(before: Plan, after: Plan, taskId: string, remove: number[], description?: string): string | undefined {
   const target = before.tasks.find(t => t.id === taskId);
   if (!target) return 'The task is not in the approved plan';
-  const strip = (plan: Plan) => ({...plan, tasks: plan.tasks.map(t => t.id === taskId ? {...t, acceptance: []} : t)});
+  const strip = (plan: Plan) => ({...plan, tasks: plan.tasks.map(t => t.id === taskId ? {...t, acceptance: [], description: ''} : t)});
   if (hash(strip(before)) !== hash(strip(after))) return 'The amendment changes more than acceptance criteria';
-  if (hash(after.tasks.find(t => t.id === taskId)?.acceptance ?? null) !== hash(target.acceptance.filter((_, index) => !remove.includes(index))))
+  const amended = after.tasks.find(t => t.id === taskId);
+  if (hash(amended?.acceptance ?? null) !== hash(target.acceptance.filter((_, index) => !remove.includes(index))))
     return 'The amended criteria are not the approved ones minus the named';
+  if (description === undefined ? amended?.description !== target.description : amended?.description !== description || !description.trim() || description.length > target.description.length)
+    return 'The amended description is not the approved one, or a non-empty shorter replacement';
   return undefined;
 }
 

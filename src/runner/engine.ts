@@ -133,7 +133,7 @@ export class Engine {
    * where the delegate may not (its limits are stricter). Like adoptConfiguration it is reviewed by hash: without the hash it only
    * shows the proposal. Nothing but the named criteria changes; branch, worktrees, sessions, repairs and Issue/PR links stay.
    */
-  async narrowAcceptance(id: string, taskId: string, remove: number[], reason: string, approvedHash?: string) {
+  async narrowAcceptance(id: string, taskId: string, remove: number[], reason: string, approvedHash?: string, description?: string) {
     const owner = this.store.acquire('run:' + id), run = this.store.get(id);
     try {
       if (!['needs_decision', 'paused'].includes(run.status) || ownerAlive(run.childPid, run.childIdentity))
@@ -142,12 +142,14 @@ export class Engine {
       if (!target) throw new Error('No such task in the approved plan: ' + taskId);
       const indexes = [...remove].sort((a, b) => a - b);
       if (!reason.trim()) throw new Error('A reason is required');
-      if (!indexes.length || new Set(indexes).size !== indexes.length || indexes.some(index => !Number.isInteger(index) || index < 0 || index >= target.acceptance.length))
+      if (description !== undefined && (!description.trim() || description.length > target.description.length)) throw new Error('A new description must be non-empty and not longer than the approved one');
+      if ((!indexes.length && description === undefined) || new Set(indexes).size !== indexes.length || indexes.some(index => !Number.isInteger(index) || index < 0 || index >= target.acceptance.length))
         throw new Error('Name existing, distinct criteria by their 0-based numbers');
       if (indexes.length >= target.acceptance.length) throw new Error('At least one criterion must remain');
-      const plan = narrowedPlan(run.plan, taskId, indexes), violation = narrowingViolation(run.plan, plan, taskId, indexes);
+      const plan = narrowedPlan(run.plan, taskId, indexes, description), violation = narrowingViolation(run.plan, plan, taskId, indexes, description);
       if (violation) throw new Error(violation);
       const proposal = {runId: id, taskId, removed: indexes.map(index => target.acceptance[index]!), remaining: plan.tasks.find(t => t.id === taskId)!.acceptance,
+        descriptionChanged: description !== undefined, descriptionHash: description === undefined ? undefined : hash(description), descriptionLength: description?.length,
         reason: redact(reason), previousPlanHash: run.planHash, planHash: hash(plan)};
       const digest = hash(proposal);
       if (!approvedHash) return {...proposal, hash: digest, status: run.status};

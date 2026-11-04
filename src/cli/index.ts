@@ -143,12 +143,14 @@ program.command('revise <task> <feedback>').description('Review a revised plan a
     return run.id;
   }).then(id => id && live(opts) ? follow(id) : undefined));
 program.command('narrow <task>').description('Remove acceptance criteria of one slice that its approved checks and the runner evidence cannot verify; shows the proposal, applies it with --apply-hash')
-  .requiredOption('--remove <numbers>', 'Comma-separated 0-based criterion numbers to remove').requiredOption('--reason <text>', 'Why they cannot be verified')
+  .option('--remove <numbers>', 'Comma-separated 0-based criterion numbers to remove').requiredOption('--reason <text>', 'Why they cannot be verified')
+  .option('--description-file <path>', 'Replace the slice description with this shorter text (UTF-8 file)')
   .option('--slice <id>', 'Slice (task id) to narrow; defaults to the first task of a direct task').option('--apply-hash <hash>', 'Apply the reviewed proposal')
   .action(async (task, opts) => withStore(async store => {
     const run = resolveRun(store, cwd(), task), engine = new Engine(store);
-    const remove = String(opts.remove).split(',').map(value => Number(value.trim()));
-    const result = await engine.narrowAcceptance(run.id, opts.slice || run.plan.tasks[0]!.id, remove, String(opts.reason), opts.applyHash);
+    const remove = String(opts.remove || '').split(',').map(value => value.trim()).filter(Boolean).map(Number);
+    const description = opts.descriptionFile ? readFileSync(String(opts.descriptionFile), 'utf8').replace(/^﻿/, '').replace(/\r\n/g, '\n').trim() : undefined;
+    const result = await engine.narrowAcceptance(run.id, opts.slice || run.plan.tasks[0]!.id, remove, String(opts.reason), opts.applyHash, description);
     output(result);
     if (!opts.applyHash) process.stderr.write(`\nReview, then apply with: easy-skills narrow ${task} --slice ${result.taskId} --remove ${opts.remove} --reason "..." --apply-hash ${result.hash}\n`);
   }));
