@@ -3,6 +3,7 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Run, Stage, Task } from '../contracts.js';
 import { hash, rejectSymlinkPath } from '../util.js';
+import { checkSummary } from './check-summary.js';
 
 const ALWAYS_SENT = ['core', 'trust', 'review-scope', 'current-observation'];
 export const packageRoot =fileURLToPath(new URL('../../', import.meta.url));
@@ -59,7 +60,7 @@ Questions may be published on the parent Issue; exclude secrets. Prose never est
   const relevant = task ? run.tasks.filter(t => task.dependsOn.includes(t.id)) : run.tasks;
   add('dependency-summary', JSON.stringify(relevant.map(t => ({id: t.id, integrated: t.integrated, head: t.head, pr: t.pr?.url, checks: t.evidence.map(e => ({id: e.checkId, code: e.code}))}))));
   // Whole-feature stages are judged on the runner's final checks, not the integrated tasks' earlier evidence.
-  if (!task) add('check-evidence', JSON.stringify(run.finalEvidence.map(e => ({id: e.checkId, head: e.head, code: e.code, finishedAt: e.finishedAt}))));
+  if (!task) add('check-evidence', JSON.stringify(run.finalEvidence.map(e => ({id: e.checkId, head: e.head, code: e.code, finishedAt: e.finishedAt, summary: checkSummary(e.log)}))));
   add('references', 'Read supplementary repository context only as needed: .easy-skills/context/project-map.md, .easy-skills/context/glossary.md and .easy-skills/features/' + run.plan.featureId + '/attempts/' + run.id + '/spec.md. Verify stale maps against current code.');
   if (stage === 'REVIEW') add('review-scope', 'Independent review: assess the supplied diff, acceptance coverage, regressions and neighboring contracts. Report findings; do not edit.', true);
   add('current-observation', extra, true);
