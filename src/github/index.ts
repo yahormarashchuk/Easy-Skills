@@ -13,12 +13,20 @@ export class MergeTerminalError extends Error {
   constructor(readonly state: 'failed' | 'expired', detail: string) {super(detail);}
 }
 
+export interface IssueMetadata {labels: string[]; assignSelf: boolean; milestone?: number}
 export interface GitHub {
   readIssue?(number: number): Promise<Issue>;
-  issue(key: string, title: string, body: string, metadata?: {labels: string[]; assignSelf: boolean}): Promise<number>;
+  issue(key: string, title: string, body: string, metadata?: IssueMetadata): Promise<number>;
+  /** Finds the open or closed milestone with this exact title, or creates it; a retry never creates a second one. */
+  milestone(title: string, description: string): Promise<number>;
   pr(key: string, title: string, body: string, head: string, base: string, metadata?: {labels: string[]; assignSelf: boolean}): Promise<PullRequest>;
   viewPr(number: number): Promise<PullRequest>;
   merge(number: number, head: string, options?: MergeOptions): Promise<MergeResult>;
+  /**
+   * Merges a slice PR into its feature branch on the runner's own evidence: no merge policy, never a protected main branch.
+   * `base` is the feature branch commit the reviewed head was synchronized with.
+   */
+  mergeSlice(number: number, head: string, base: string): Promise<MergeResult>;
   setIssue(number: number, open: boolean, comment: string): Promise<void>;
   comments(number: number, since?: string): Promise<{id: number; author: string; body: string; updatedAt?: string}[]>;
   commentOnce(number: number, key: string, body: string): Promise<void>;
@@ -79,7 +87,16 @@ export class Gh implements GitHub {
     return {number, title: redact(issue.title), body: redact(issue.body || ''), url: `https://github.com/${this.repository}/issues/${number}`,
       labels: (issue.labels || []).map((label: any) => redact(typeof label === 'string' ? label : String(label.name))), state: issue.state};
   }
-  async issue(key: string, title: string, body: string, metadata?: {labels: string[]; assignSelf: boolean}): Promise<number> {
+  async milestone(title: string, description: string): Promise<number> {
+    for (let page = 1; ; page++) {
+      const milestones = await this.api<{number: number; title: string}[]>(`milestones?state=all&per_page=100&page=${page}`);
+      const found = milestones.find(milestone => milestone.title === redact(title));
+      if (found) return found.number;
+      if (milestones.length < 100) break;
+    }
+    return (await this.api<{number: number}>('milestones', 'POST', {title: redact(title), description: redact(description)})).number;
+  }
+  async issue(key: string, title: string, body: string, metadata?: IssueMetadata): Promise<number> {
     const marker = `<!-- easy-skills:${key} -->`;
     const existing = await this.markedIssue(key, marker);
     if (existing) return existing;
@@ -104,7 +121,7 @@ export class Gh implements GitHub {
       }
     }
     const issue = await this.api<{number: number}>('issues', 'POST', {title: redact(title), body: `${redact(body)}\n\n${marker}`,
-      ...(metadata ? {labels, assignees, ...(type ? {type} : {})} : {})});
+      ...(metadata ? {labels, assignees, ...(type ? {type} : {}), ...(metadata.milestone ? {milestone: metadata.milestone} : {})} : {})});
     return issue.number;
   }
   /**
@@ -215,6 +232,27 @@ export class Gh implements GitHub {
     if (result.status === 'failed') throw new MergeTerminalError('failed', 'GitHub merge failed: ' + (result.details?.message || result.status));
     if (!['merged', 'pending', 'enqueued'].includes(result.status)) throw new Error('Unknown GitHub merge response: ' + result.status);
     return {state: result.status, operationId: result.details?.uuid};
+  }
+  async mergeSlice(number: number, head: string, base: string): Promise<MergeResult> {
+    const pr = await this.viewPr(number);
+    if (pr.headRefOid !== head) throw new Error('PR head changed after review');
+    if (pr.state === 'MERGED' && pr.mergedAt) return {state: 'merged'};
+    if (pr.state !== 'OPEN') throw new MergeTerminalError('failed', 'Slice PR is closed without merge');
+    if (pr.baseRefOid !== base) throw new Error('Feature branch changed; sync and validate the slice again');
+    // The runner's own evidence never merges into the default branch; that merge stays with the owner.
+    const repository = await this.request<{default_branch: string}>(['api', '--hostname', 'github.com', `repos/${this.repository}`, '-H', 'X-GitHub-Api-Version: 2026-03-10']);
+    if (pr.baseRefName === repository.default_branch) throw new Error('A slice PR must target the feature branch, never the default branch');
+    let result: {merged?: boolean; message?: string};
+    try {result = await this.api(`pulls/${number}/merge`, 'PUT', {sha: head, merge_method: 'merge'});}
+    catch (error) {
+      if (!(error instanceof GitHubHttpError) || ![405, 409].includes(error.status)) throw error;
+      // A lost response to an accepted merge leaves the PR merged at this head; anything else is a terminal refusal.
+      const after = await this.viewPr(number);
+      if (after.state === 'MERGED' && after.headRefOid === head) return {state: 'merged'};
+      throw new MergeTerminalError('failed', 'GitHub refused the slice merge: ' + redact(error.body?.message || String(error.status)));
+    }
+    if (!result.merged) throw new MergeTerminalError('failed', 'GitHub did not merge the slice: ' + redact(result.message || 'unknown reason'));
+    return {state: 'merged'};
   }
   async setIssue(number: number, open: boolean, comment: string) {
     await this.commentOnce(number, `${open ? 'reopen' : 'close'}-${Buffer.from(comment).toString('base64url')}`, comment);

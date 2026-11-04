@@ -69,22 +69,49 @@ export async function fixture(stack = 'node', options: {setup?: import('../src/c
       rmSync(dir, {recursive: true, force: true});
     }};
 }
+/** What a published Issue or PR carries, after the repository-label filter and self-assignment the real transport applies. */
+export interface Published {key: string; title: string; body: string; labels: string[]; assignee?: string; milestone?: number}
 export class FakeGitHub implements GitHub {
   objects = new Map<string, number>(); prs = new Map<number, PullRequest>(); issues = new Map<number, boolean>();
   issueComments: {id: number; author: string; body: string}[] = [];
-  commentsWritten: string[] = []; merges: number[] = []; next = 1;
+  commentsWritten: string[] = []; merges: number[] = []; sliceMerges: number[] = []; next = 1;
+  /** Repository labels; requested labels that do not exist are skipped. */
+  labels = ['bug', 'enhancement'];
+  milestones = new Map<string, number>(); published = new Map<number, Published>();
+  /** Ordered external effects, to prove for example that an Issue closes only after its PR merged. */
+  log: string[] = [];
   constructor(readonly remote: string) {}
-  async issue(key: string) {
-    if (!this.objects.has(key)) {this.objects.set(key, this.next++); this.issues.set(this.objects.get(key)!, true);}
+  private record(number: number, key: string, title: string, body: string, metadata?: {labels: string[]; assignSelf: boolean; milestone?: number}) {
+    this.published.set(number, {key, title, body, labels: this.labels.filter(label => metadata?.labels.some(l => l.toLowerCase() === label)),
+      assignee: metadata?.assignSelf ? 'fixture-owner' : undefined, milestone: metadata?.milestone});
+  }
+  async milestone(title: string) {
+    if (!this.milestones.has(title)) {this.milestones.set(title, this.milestones.size + 1); this.log.push('milestone ' + title);}
+    return this.milestones.get(title)!;
+  }
+  async issue(key: string, title = '', body = '', metadata?: {labels: string[]; assignSelf: boolean; milestone?: number}) {
+    if (!this.objects.has(key)) {
+      this.objects.set(key, this.next++); this.issues.set(this.objects.get(key)!, true);
+      this.record(this.objects.get(key)!, key, title, body, metadata); this.log.push('issue #' + this.objects.get(key));
+    }
     return this.objects.get(key)!;
   }
-  async pr(key: string, title: string, body: string, head: string, base: string) {
+  async pr(key: string, title: string, body: string, head: string, base: string, metadata?: {labels: string[]; assignSelf: boolean}) {
     const headOid = await checked('git', ['rev-parse', `refs/heads/${head}`], this.remote);
-    if (!this.objects.has(key)) this.objects.set(key, this.next++);
+    if (!this.objects.has(key)) {this.objects.set(key, this.next++); this.log.push(`pr #${this.objects.get(key)} ${head} -> ${base}`);}
     const number = this.objects.get(key)!;
+    this.record(number, key, title, body, metadata);
     const pr = this.prs.get(number) || {number, url: `https://github.com/test/example/pull/${number}`, headRefOid: headOid,
       state: 'OPEN', mergedAt: null, baseRefName: base, headRefName: head};
     pr.headRefOid = headOid; this.prs.set(number, pr); return {...pr};
+  }
+  async mergeSlice(number: number, head: string, base: string): Promise<MergeResult> {
+    const pr = await this.viewPr(number);
+    if (pr.state === 'MERGED') return {state: 'merged'};
+    if (pr.baseRefName === 'trunk') throw new Error('A slice PR must target the feature branch, never the default branch');
+    if (await checked('git', ['rev-parse', `refs/heads/${pr.baseRefName}`], this.remote) !== base) throw new Error('Feature branch changed');
+    const result = await this.merge(number, head);
+    this.sliceMerges.push(number); return result;
   }
   async viewPr(number: number) {
     const pr = this.prs.get(number)!;
@@ -99,9 +126,13 @@ export class FakeGitHub implements GitHub {
     const commit = await checked('git', ['commit-tree', tree, '-p', base, '-p', head, '-m', 'Merge fixture PR'], this.remote);
     await checked('git', ['update-ref', `refs/heads/${pr.baseRefName}`, commit], this.remote);
     Object.assign(this.prs.get(number)!, {state: 'MERGED', mergedAt: new Date().toISOString()}); this.merges.push(number);
+    this.log.push('merge #' + number);
     return {state: 'merged' as const};
   }
-  async setIssue(number: number, open: boolean, comment: string) {this.issues.set(number, open); this.commentsWritten.push(comment);}
+  async setIssue(number: number, open: boolean, comment: string) {
+    if (this.issues.get(number) !== open) this.log.push(`${open ? 'reopen' : 'close'} #${number}`);
+    this.issues.set(number, open); this.commentsWritten.push(comment);
+  }
   async comments() {return this.issueComments;}
-  async commentOnce(number: number, key: string, body: string) {this.commentsWritten.push(body);}
+  async commentOnce(number: number, key: string, body: string) {this.commentsWritten.push(body); this.log.push(`comment #${number} ${key}`);}
 }

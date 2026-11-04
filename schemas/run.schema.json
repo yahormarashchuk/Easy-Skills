@@ -564,62 +564,130 @@
           "additionalProperties": false
         },
         "workflow": {
-          "type": "object",
-          "properties": {
-            "mode": {
-              "type": "string",
-              "const": "direct"
-            },
-            "issue": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991
-            },
-            "issueHistory": {
-              "type": "boolean"
-            },
-            "baseHead": {
-              "type": "string",
-              "pattern": "^[a-f0-9]{40,64}$"
-            },
-            "permissions": {
+          "oneOf": [
+            {
               "type": "object",
               "properties": {
-                "pushBranch": {
+                "mode": {
+                  "type": "string",
+                  "const": "direct"
+                },
+                "issue": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "issueHistory": {
                   "type": "boolean"
                 },
-                "createPullRequest": {
-                  "type": "boolean"
+                "baseHead": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{40,64}$"
                 },
-                "closeIssueOnMerge": {
-                  "type": "boolean"
+                "permissions": {
+                  "type": "object",
+                  "properties": {
+                    "pushBranch": {
+                      "type": "boolean"
+                    },
+                    "createPullRequest": {
+                      "type": "boolean"
+                    },
+                    "closeIssueOnMerge": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "pushBranch",
+                    "createPullRequest",
+                    "closeIssueOnMerge"
+                  ],
+                  "additionalProperties": false
+                },
+                "context": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string",
+                    "pattern": "^\\.easy-skills\\/(?:rules\\/[^:]+|context\\/[^:]+|project\\.yaml|decisions\\/onboarding\\.json)$"
+                  },
+                  "additionalProperties": {
+                    "type": "string"
+                  }
                 }
               },
               "required": [
-                "pushBranch",
-                "createPullRequest",
-                "closeIssueOnMerge"
+                "mode",
+                "baseHead",
+                "permissions",
+                "context"
               ],
               "additionalProperties": false
             },
-            "context": {
+            {
               "type": "object",
-              "propertyNames": {
-                "type": "string",
-                "pattern": "^\\.easy-skills\\/(?:rules\\/[^:]+|context\\/[^:]+|project\\.yaml|decisions\\/onboarding\\.json)$"
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "const": "slices"
+                },
+                "issue": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "issueHistory": {
+                  "type": "boolean",
+                  "const": true
+                },
+                "baseHead": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{40,64}$"
+                },
+                "permissions": {
+                  "type": "object",
+                  "properties": {
+                    "pushBranch": {
+                      "type": "boolean"
+                    },
+                    "createPullRequest": {
+                      "type": "boolean"
+                    },
+                    "closeIssueOnMerge": {
+                      "type": "boolean"
+                    },
+                    "mergeSlices": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "pushBranch",
+                    "createPullRequest",
+                    "closeIssueOnMerge",
+                    "mergeSlices"
+                  ],
+                  "additionalProperties": false
+                },
+                "context": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string",
+                    "pattern": "^\\.easy-skills\\/(?:rules\\/[^:]+|context\\/[^:]+|project\\.yaml|decisions\\/onboarding\\.json)$"
+                  },
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
               },
-              "additionalProperties": {
-                "type": "string"
-              }
+              "required": [
+                "mode",
+                "issueHistory",
+                "baseHead",
+                "permissions",
+                "context"
+              ],
+              "additionalProperties": false
             }
-          },
-          "required": [
-            "mode",
-            "baseHead",
-            "permissions",
-            "context"
-          ],
-          "additionalProperties": false
+          ]
         }
       },
       "required": [
@@ -1024,6 +1092,13 @@
         },
         "answer": {
           "type": "string"
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "owner",
+            "delegate"
+          ]
         }
       },
       "required": [

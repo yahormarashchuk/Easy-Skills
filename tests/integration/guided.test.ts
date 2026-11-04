@@ -14,6 +14,9 @@ import { hash } from '../../src/util.js';
 import { TerminalInteraction } from '../../src/cli/interaction.js';
 import { deliveryIssues } from '../../src/runner/issue-history.js';
 
+// These tests cover the direct workflow (one task, one PR); sliced features are covered in slices.test.ts.
+process.env.EASY_SKILLS_WORKFLOW = 'direct';
+
 class UI implements Interaction {
   messages: string[] = []; questions: string[] = []; confirmations: string[] = [];
   denied = new Set<string>(); values: Record<string, string> = {};

@@ -20,7 +20,7 @@ import { loadProject } from '../cli/project.js';
 import { CodeFailure, startRepair, pendingRepair, completeRepair, repairKey, type Repair } from './repairs.js';
 import { ownerAlive, processIdentity } from '../process-identity.js';
 import { ignoredOutputs } from './setup-outputs.js';
-import { publishRepairIssue, repairIssues, issueLabels, closeRepairIssues, allRepairs } from './issue-history.js';
+import { publishRepairIssue, repairIssues, issueLabels, closeRepairIssues, allRepairs, milestone, milestoneKey, sliceRepairIssues } from './issue-history.js';
 import { pullRequestBody, pullRequestTitle } from './pull-request.js';
 import { MAX_DELEGATE_DECISIONS, acceptDelegateReply, delegatePrompt } from './delegate.js';
 
@@ -49,10 +49,14 @@ export class Engine {
         throw new Blocked('Task changed managed project knowledge; preserve changes and review a replacement plan');
       const merging = existsSync(await git.run(['rev-parse', '--path-format=absolute', '--git-path', 'MERGE_HEAD'], cwd));
       if (!merging) {
-        const base = await git.run(['merge-base', `origin/${run.plan.project.mainBranch}`, 'HEAD'], cwd);
+        // A slice worktree may change only its own paths beyond the feature branch it started from; the feature branch
+        // itself may hold the union of every slice's paths beyond main.
+        const task = state && run.plan.tasks.find(t => t.id === state.id);
+        const base = await git.run(['merge-base', task ? `refs/heads/${run.branch}` : `origin/${run.plan.project.mainBranch}`, 'HEAD'], cwd);
+        const paths = task ? task.scope!.paths : run.plan.tasks.flatMap(t => t.scope!.paths);
         const changed = (await git.run(['diff', '--name-only', '-z', base, '--'], cwd)).split('\0').filter(Boolean);
         changed.push(...(await git.run(['ls-files', '--others', '--exclude-standard', '-z'], cwd)).split('\0').filter(Boolean));
-        const outside = changed.filter(p => !inScope(p, run.plan.tasks[0]!.scope!.paths));
+        const outside = changed.filter(p => !inScope(p, paths));
         if (outside.length) throw new Blocked('Changes exceed the approved task paths: ' + outside.join(', '));
       }
     }
@@ -90,6 +94,10 @@ export class Engine {
         throw new Error('Feedback proposal is stale; review the current plan and revision');
       for (const field of ['featureId', 'project', 'workflow', 'permissions'] as const)
         if (hash(plan[field]) !== hash(run.plan[field])) throw new Error('Feedback cannot change task identity or external permissions: ' + field);
+      // Merged slices, their Issues and PRs are history: feedback adds slices and never rewrites one.
+      const sliced = plan.workflow.mode === 'slices';
+      if (sliced && run.plan.tasks.some(task => hash(plan.tasks.find(t => t.id === task.id) ?? null) !== hash(task)))
+        throw new Error('Feedback on a sliced feature keeps every earlier slice unchanged and adds new slices');
       const intent = this.store.operation<{state: string}>(`${id}:merge:${run.finalPr!.number}:${head}`);
       if (intent && !['failed', 'expired', 'cancelled'].includes(intent.state)) throw new Error('Reconcile the outstanding merge before revising');
       const git = this.git(run), github = this.options.github || new Gh(run.plan.project.repository, run.root);
@@ -106,7 +114,7 @@ export class Engine {
           if (hash(plan.assignments[stage]) !== hash(run.plan.assignments[stage])) delete run.finalSessions[stage];
         run.plan = plan; run.planHash = expectedHash; run.approvedHash = undefined; run.status = 'draft';
         run.finalReviewHead = undefined; run.finalEvidence = []; run.finalPhase = 'SYNC';
-        run.tasks = plan.tasks.map(t => ({id: t.id, cursor: 'BUILD', integrated: false, evidence: [], sessions: {}}));
+        run.tasks = plan.tasks.map(t => (sliced && run.tasks.find(s => s.id === t.id)) || {id: t.id, cursor: 'BUILD', integrated: false, evidence: [], sessions: {}});
         run.pendingDecision = undefined;
         this.store.save(run, 'feedback.proposed');
         this.approve(id, expectedHash);
@@ -131,7 +139,9 @@ export class Engine {
       const removed = previous.checks.filter(check => !project.checks.some(c => hash(c) === hash(check)));
       if (removed.length) throw new Error('A new configuration cannot remove or change approved checks: ' + removed.map(c => c.id).join(', '));
       if (!Number.isInteger(extraRepairs) || extraRepairs < 0 || extraRepairs > 5) throw new Error('Extra repair attempts must be a whole number from 1 to 5');
-      const repairs = this.store.operation<Repair[]>(repairKey(run, 'feature')) || [], completed = repairs.filter(r => r.state === 'completed').length;
+      // A sliced feature stops inside its current slice, whose repairs carry their own limit.
+      const slice = run.plan.workflow.mode === 'slices' ? run.tasks.find(t => !t.integrated) : undefined, scope = slice ? `task:${slice.id}` : 'feature';
+      const repairs = this.store.operation<Repair[]>(repairKey(run, scope)) || [], completed = repairs.filter(r => r.state === 'completed').length;
       // Raising the limit is an owner decision inside the new plan; it counts attempts already made and never lowers the limit.
       const limit = extraRepairs ? Math.max(run.plan.repairPolicy?.maxCompletedAttempts ?? 0, completed + extraRepairs) : run.plan.repairPolicy?.maxCompletedAttempts;
       const plan = Plan.parse({...run.plan, project, protectedInputs: protectedManifest(run.root, project), rulesHash: rulesHash(run.root),
@@ -163,8 +173,8 @@ export class Engine {
         }
         // The owner approved a new plan: completed repairs no longer count against its limit, unless the owner raised the limit itself.
         if (repairs.length && !extraRepairs) {
-          this.store.recordOperation(`${repairKey(run, 'feature')}:superseded:${run.planHash}`, id, 'repair.superseded', repairs);
-          this.store.recordOperation(repairKey(run, 'feature'), id, 'repair.adopted', repairs.filter(r => r.state === 'pending').map(r =>
+          this.store.recordOperation(`${repairKey(run, scope)}:superseded:${run.planHash}`, id, 'repair.superseded', repairs);
+          this.store.recordOperation(repairKey(run, scope), id, 'repair.adopted', repairs.filter(r => r.state === 'pending').map(r =>
             ({...r, reason: r.reason + '\nThe owner approved a revised project configuration adding checks: ' + proposal.addedChecks.map(c => c.id).join(', ') + '. The runner records their results.'})));
         }
         run.plan = plan; run.planHash = proposal.planHash; run.approvedHash = proposal.planHash;
@@ -231,8 +241,9 @@ export class Engine {
         this.store.recordOperation(`${id}:manual-sync`, id, 'manual.sync', {pending: false});
         this.store.save(run, 'manual.sync.recovered');
       }
-      if (run.plan.workflow) await this.directBuild(run, git);
-      while (!run.plan.workflow && run.tasks.some(t => !t.integrated)) {
+      if (run.plan.workflow?.mode === 'direct') await this.directBuild(run, git);
+      // Advanced tasks and slices: each in dependency order through its own worktree, PR and merge into the feature branch.
+      while (run.plan.workflow?.mode !== 'direct' && run.tasks.some(t => !t.integrated)) {
         this.checkpoint(run);
         const task = run.plan.tasks.find(t => !run.tasks.find(s => s.id === t.id)!.integrated &&
           t.dependsOn.every(dep => run.tasks.find(s => s.id === dep)!.integrated));
@@ -285,11 +296,29 @@ export class Engine {
     }
     await git.carryIgnoredControls(run.root, run.worktree);
     await this.guard(run, run.worktree);
+    const sliced = run.plan.workflow?.mode === 'slices';
+    // A sliced feature is published as a whole right after approval: its milestone, the parent and one Issue per slice.
+    if (sliced && !milestone(this.store, run)) {
+      const number = await github.milestone(run.plan.title, `${run.plan.featureId}: ${run.plan.tasks.length} slices merged into ${run.branch}, then one PR to ${run.plan.project.mainBranch}.\nRun: ${run.id}`);
+      this.store.recordOperation(milestoneKey(run), run.id, 'github.milestone.created', number);
+    }
+    const metadata = sliced ? {labels: issueLabels(run, false), assignSelf: true, milestone: milestone(this.store, run)} : {labels: issueLabels(run, false), assignSelf: true};
     if (run.plan.workflow?.issueHistory && !run.parentIssue) {
       run.parentIssue = await github.issue(`${run.id}:feature`, run.plan.title,
-        `## Trigger / current behavior\n\n${run.plan.spec}\n\n## Acceptance criteria\n\n${run.plan.tasks.flatMap(t => t.acceptance).map(a => '- ' + a).join('\n')}\n\n## Development history\n\nRun: ${run.id}\nApproved plan: ${run.planHash}\nRepair Issues and the verified delivery PR will be linked here.`,
-        {labels: issueLabels(run, false), assignSelf: true});
+        `## Trigger / current behavior\n\n${run.plan.spec}\n\n## Acceptance criteria\n\n${run.plan.tasks.flatMap(t => t.acceptance).map(a => '- ' + a).join('\n')}\n\n## Development history\n\nRun: ${run.id}\nApproved plan: ${run.planHash}\n${sliced ? 'Slice Issues, their PRs into ' + run.branch + ', bug Issues' : 'Repair Issues'} and the verified delivery PR will be linked here.`,
+        metadata);
       this.store.save(run, 'github.parent.created');
+    }
+    const ordered: Task[] = [];
+    while (ordered.length < run.plan.tasks.length) ordered.push(...run.plan.tasks.filter(t => !ordered.includes(t) && t.dependsOn.every(dep => ordered.some(o => o.id === dep))));
+    if (sliced) for (const task of ordered) {
+      const state = run.tasks.find(t => t.id === task.id)!;
+      if (state.issue) continue;
+      state.issue = await github.issue(`${run.id}:task:${task.id}`, task.title,
+        `## Slice\n\n${task.description}\n\n## Acceptance criteria\n\n${task.acceptance.map(a => '- ' + a).join('\n')}\n\n## Scope\n\n${task.scope!.paths.map(p => '- `' + p + '`').join('\n')}\n\n` +
+        `Dependencies: ${task.dependsOn.map(dep => `${dep} (#${run.tasks.find(t => t.id === dep)?.issue})`).join(', ') || 'none'}\nParent: #${run.parentIssue}\nApproved plan: ${run.planHash}\n\n` +
+        `The runner merges this slice's verified and reviewed PR into \`${run.branch}\` and closes this Issue after that merge.`, metadata);
+      this.store.save(run, 'github.task.created', {task: task.id, issue: state.issue});
     }
     // A task granted Issue history after repairs already happened publishes those repairs too, so GitHub shows every round.
     if (run.plan.workflow?.issueHistory) for (const repair of allRepairs(this.store, run))
@@ -308,8 +337,10 @@ export class Engine {
     }
     const baseline = this.store.operation<{status: string}>(`${run.id}:baseline`)!;
     if (baseline.status !== 'passed') throw new Blocked(`Baseline ${baseline.status}; resolve or explicitly replan the existing problem before feature implementation`);
-    if (run.plan.workflow) return;
-    if (!run.plan.permissions.publishIssues) throw new Blocked('Publishing Issues and PRs is not authorized by this plan');
+    if (run.plan.workflow?.mode === 'direct') return;
+    if (sliced && (!run.plan.workflow!.permissions.pushBranch || !run.plan.workflow!.permissions.createPullRequest))
+      throw new Blocked('The approved feature does not authorize branch push and PR creation');
+    if (!sliced && !run.plan.permissions.publishIssues) throw new Blocked('Publishing Issues and PRs is not authorized by this plan');
     if (!run.parentIssue) {
       run.parentIssue = await github.issue(`${run.id}:feature`, run.plan.title, run.plan.spec);
       this.store.save(run, 'github.parent.created');
@@ -323,7 +354,7 @@ export class Engine {
     await git.push(run.branch, run.worktree);
     for (const task of run.plan.tasks) {
       const state = run.tasks.find(t => t.id === task.id)!;
-      if (!state.issue) {
+      if (!state.issue && !sliced) {
         state.issue = await github.issue(`${run.id}:task:${task.id}`, task.title,
           `${task.description}\n\nAcceptance:\n${task.acceptance.map(a => '- ' + a).join('\n')}\n\nDependencies: ${task.dependsOn.join(', ') || 'none'}\n\nParent: #${run.parentIssue}\nApproved plan: ${run.planHash}`);
         this.store.save(run, 'github.task.created', {task: task.id, issue: state.issue});
@@ -401,7 +432,7 @@ export class Engine {
     if (state.asked.length >= MAX_DELEGATE_DECISIONS || state.asked.includes(hash(decision.question))) return undefined;
     let reply;
     try {
-      const raw = await this.client.run(run.plan.assignments.PLAN, delegatePrompt(run.plan, stage, task?.title, decision.question, result.summary, result.findings, state.questions), {
+      const raw = await this.client.run(run.plan.assignments.PLAN, delegatePrompt(run.plan, stage, task, decision.question, result.summary, result.findings, state.questions), {
         cwd, stage: 'PLAN', projectRoot: run.root, mode: 'read', signal: this.options.signal});
       reply = raw.outcome === 'passed' ? acceptDelegateReply(raw.summary, state.asked, decision.question) : undefined;
     } catch (error) {
@@ -411,10 +442,11 @@ export class Engine {
     this.store.recordOperation(key, run.id, 'delegate.asked', {asked: [...state.asked, hash(decision.question)], questions: [...state.questions, redact(decision.question).slice(0, 300)]});
     if (!reply) {this.store.event(run.id, 'decision.escalated', {request: decision.id, stage, task: task?.id}); return undefined;}
     this.store.event(run.id, 'decision.delegated', {request: decision.id, stage, task: task?.id, category: reply.category, question: redact(decision.question), answer: redact(reply.answer), rationale: redact(reply.rationale)});
-    if (run.parentIssue) {
+    const issue = run.tasks.find(t => t.id === task?.id)?.issue || run.parentIssue;
+    if (issue) {
       try {
         const github = this.options.github || new Gh(run.plan.project.repository, run.root);
-        await github.commentOnce(run.parentIssue, 'delegate:' + decision.id, redact(`Autonomous decision (no owner was asked) during ${stage}.\n\nQuestion: ${decision.question}\n\nAnswer: ${reply.answer}\n\nWhy it stays inside the approved plan: ${reply.rationale}`));
+        await github.commentOnce(issue, 'delegate:' + decision.id, redact(`Autonomous decision (no owner was asked) during ${stage}.\n\nQuestion: ${decision.question}\n\nAnswer: ${reply.answer}\n\nWhy it stays inside the approved plan: ${reply.rationale}`));
       } catch { /* the record in the run history stands */ }
     }
     return reply;
@@ -607,7 +639,7 @@ export class Engine {
       state.worktree = await this.ownedWorktree(run, git, state.branch, run.branch, task.id);
       this.store.save(run, 'task.worktree.created', {task: task.id});
     }
-    const cwd = state.worktree;
+    const cwd = state.worktree, sliced = run.plan.workflow?.mode === 'slices';
     await git.carryIgnoredControls(run.root, cwd);
     await this.guard(run, cwd); await this.setup(run, git, cwd);
     while (!state.integrated) {
@@ -621,8 +653,12 @@ export class Engine {
               await github.setIssue(state.issue!, true, 'Implementation is being repaired; previous readiness is invalid.');
             }
             const repair = pendingRepair(this.store, run, `task:${state.id}`);
+            // A failed slice check or review becomes a bug Issue before the corrective BUILD, like a whole-feature repair.
+            const bug = repair && sliced ? await publishRepairIssue(this.store, run, github, repair) : undefined;
+            if (bug && state.issue) await github.commentOnce(state.issue, `repair:${repair!.id}`, `Repair required: #${bug}\n\n${cleanExcerpt(repair!.reason, this.store.home)}`);
             state.head = await this.build(run, git, cwd, state, task, repair?.id || `initial-${state.id}`,
-              repair ? `Repair ${repair.id}: ${JSON.stringify(repair)}. Preserve all approved inputs.` : 'Implement the approved task. Keep Git commits under runner control.');
+              repair ? `Repair ${repair.id}: ${JSON.stringify(repair)}. Preserve all approved inputs.` : `Implement the approved ${sliced ? 'slice only; later slices follow in their own PRs' : 'task'}. Keep Git commits under runner control.`);
+            if (bug) await github.commentOnce(bug, `implemented:${repair!.id}`, `Corrective BUILD completed at ${state.head}. Independent checks, VERIFY, REVIEW and the slice merge are pending.`);
             await git.clean(cwd);
             this.store.transaction(() => {
               if (repair) completeRepair(this.store, run, repair.scope, repair.id);
@@ -653,14 +689,21 @@ export class Engine {
             await this.agent(run, 'SHIP', cwd, state, task, 'Inspect delivery readiness. The runner publishes and closes the Issue.');
             await git.clean(cwd); if (await git.head(cwd) !== head) throw new Blocked('SHIP changed the reviewed commit');
             await git.push(state.branch!, cwd);
-            state.pr = await github.pr(`${run.id}:pr:${task.id}`, task.title,
-              `${task.description}\n\nImplements #${state.issue}.\n\nChecks at ${head}:\n${state.evidence.map(e => '- ' + e.checkId + ': passed').join('\n')}\n\nReview: passed at ${state.reviewHead}`, state.branch!, run.branch);
+            const checked = `Checks at ${head}:\n${state.evidence.map(e => '- ' + e.checkId + ': passed').join('\n')}\n\nReview: passed at ${state.reviewHead}`;
+            // A slice PR names its Issue and bug Issues with Fixes; GitHub closes only on the default branch, so the runner closes them after its merge.
+            state.pr = sliced
+              ? await github.pr(`${run.id}:pr:${task.id}`, task.title, `${task.description}\n\n## Acceptance criteria\n\n${task.acceptance.map(a => '- ' + a).join('\n')}\n\n## Verification\n\n${checked}\n\n` +
+                `## Issues\n\n${[state.issue!, ...sliceRepairIssues(this.store, run, task.id)].map(n => 'Fixes #' + n).join('\n')}\nParent: #${run.parentIssue}\n\nThe runner merges this PR into \`${run.branch}\` at the reviewed head; the PR to ${run.plan.project.mainBranch} is merged by the owner.`,
+                state.branch!, run.branch, {labels: issueLabels(run, false), assignSelf: true})
+              : await github.pr(`${run.id}:pr:${task.id}`, task.title, `${task.description}\n\nImplements #${state.issue}.\n\n${checked}`, state.branch!, run.branch);
             if (state.pr.headRefOid !== head) throw new Blocked('PR head differs from the checked commit');
-            await github.setIssue(state.issue!, false, `Implemented and verified at ${head}. PR: ${state.pr.url}. Dependencies remain pending until integration merge.`);
+            if (sliced) await github.commentOnce(state.issue!, `verified:${head}`, `Verified and reviewed at ${head}. PR: ${state.pr.url}. This Issue closes after the runner merges it into ${run.branch}.`);
+            else await github.setIssue(state.issue!, false, `Implemented and verified at ${head}. PR: ${state.pr.url}. Dependencies remain pending until integration merge.`);
             state.cursor = 'INTEGRATE'; this.store.save(run, 'task.pr.ready', {task: task.id, pr: state.pr}); break;
           }
           case 'INTEGRATE': {
-            if (!run.plan.permissions.mergeIntermediate) throw new Blocked('Intermediate merge requires permission in the approved plan');
+            if (run.plan.workflow?.mode === 'slices' ? !run.plan.workflow.permissions.mergeSlices : !run.plan.permissions.mergeIntermediate) throw new Blocked('Intermediate merge requires permission in the approved plan');
+            const merge = (pr: PullRequest, head: string, base: string) => sliced ? this.mergeSlice(run, github, pr, head, base) : this.merge(run, github, pr, head, base);
             let pr = await github.viewPr(state.pr!.number);
             if (pr.baseRefName !== run.branch || pr.headRefName !== state.branch) throw new Blocked('PR target or source changed');
             if (pr.state !== 'MERGED') {
@@ -669,21 +712,26 @@ export class Engine {
               if (pr.headRefOid !== head || state.reviewHead !== head || !this.sufficient(run, state.evidence, head))
                 throw new Blocked('PR changed after validation');
               const pending = this.store.operation<{state: string; base: string}>(`${run.id}:merge:${pr.number}:${head}`);
-              // Observe an authorized in-flight request before changing either branch.
-              if (pending) {
+              // Observe an authorized in-flight request before changing either branch; a refused slice merge starts again from a fresh sync.
+              if (pending && !(sliced && pending.state === 'failed')) {
                 if (pending.state === 'merged') throw new ClientError('waiting_merge', 'Merge request completed; waiting for the actual PR outcome');
-                await this.merge(run, github, pr, head, pending.base);
+                await merge(pr, head, pending.base);
                 break;
               }
               await this.syncTask(run, state, task, git, github);
               if (state.cursor !== 'INTEGRATE') break;
-              await this.merge(run, github, pr, head, await git.run(['rev-parse', `origin/${run.branch}`]));
+              await merge(pr, head, await git.run(['rev-parse', `origin/${run.branch}`]));
               pr = await github.viewPr(pr.number);
             }
             if (pr.state !== 'MERGED' || !pr.mergedAt) throw new Blocked('Intermediate merge is not confirmed');
             if (pr.headRefOid !== state.reviewHead || !this.sufficient(run, state.evidence, pr.headRefOid)) throw new Blocked('Merged PR head differs from the reviewed and verified revision; dependency remains pending');
             await git.fetch(); await git.clean(run.worktree!);
             await git.run(['merge', '--ff-only', `origin/${run.branch}`], run.worktree!);
+            // Closing is idempotent and precedes the integrated mark, so an interruption never leaves a merged slice's Issues open.
+            if (sliced && run.plan.workflow!.permissions.closeIssueOnMerge) {
+              for (const bug of sliceRepairIssues(this.store, run, task.id)) await github.setIssue(bug, false, `Repaired slice merged into ${run.branch}: ${pr.url}`);
+              await github.setIssue(state.issue!, false, `Slice merged into ${run.branch} at ${pr.headRefOid}: ${pr.url}. The feature reaches ${run.plan.project.mainBranch} through the final PR.`);
+            }
             state.pr = pr; state.integrated = true;
             run.failures = {fingerprint: '', head: '', count: 0};
             this.store.save(run, 'task.integrated', {task: task.id, pr: pr.number}); break;
@@ -749,6 +797,30 @@ export class Engine {
     this.store.recordOperation(key, run.id, 'merge.' + result.state, {...intent, ...result, nextPollAt: Date.now() + 60_000});
     this.store.event(run.id, 'merge.observed', {pr: pr.number, ...result});
     if (result.state !== 'merged') throw new ClientError('waiting_merge', 'Merge ' + result.state + '; waiting for actual GitHub merge', new Date(Date.now() + 60_000).toISOString());
+  }
+  /**
+   * The runner merges a slice PR into the feature branch itself: the approved plan grants it, and the evidence is the runner's
+   * own checks and REVIEW at the PR head, so no GitHub merge policy is involved. The intent binds head, base and plan like an
+   * authorized merge; a lost response is retried against the same head, a refusal stops for the owner.
+   */
+  private async mergeSlice(run: Run, github: GitHub, pr: PullRequest, head: string, base: string) {
+    const key = `${run.id}:merge:${pr.number}:${head}`;
+    const prior = this.store.operation<{state: string; base: string; head: string; planHash: string}>(key);
+    if (prior && prior.state !== 'failed' && (prior.base !== base || prior.head !== head || prior.planHash !== run.planHash)) throw new Blocked('Merge authorization binding changed; a new decision is required');
+    const intent = {state: 'executing', base, head, planHash: run.planHash, slice: true};
+    this.store.recordOperation(key, run.id, 'merge.slice.intent', intent);
+    try {await github.mergeSlice(pr.number, head, base);}
+    catch (error) {
+      if (error instanceof MergeTerminalError) {
+        this.store.recordOperation(key, run.id, 'merge.slice.failed', {...intent, state: 'failed', reason: redact(message(error))});
+        throw new Blocked(message(error) + '; resolve it on GitHub, then resume');
+      }
+      if (!(error instanceof ClientError && ['quota', 'network'].includes(error.kind)))
+        this.store.recordOperation(key, run.id, 'merge.slice.uncertain', {...intent, state: 'uncertain', reason: redact(message(error))});
+      throw error;
+    }
+    this.store.recordOperation(key, run.id, 'merge.slice.merged', {...intent, state: 'merged'});
+    this.store.event(run.id, 'merge.observed', {pr: pr.number, state: 'merged', slice: true});
   }
   async sync(run: Run, cwd: string, target: string, git: Git, state?: TaskState, task?: Task) {
     this.checkpoint(run);

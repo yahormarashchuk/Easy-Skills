@@ -68,7 +68,7 @@ export class Store {
     }
     const run: Run = {
       id: randomUUID(), root, commonDir, plan, planHash: hash(plan), revision: 0,
-      status: 'draft', createdAt: now(), updatedAt: now(), branch: `${plan.workflow ? 'codex' : 'feature'}/${plan.featureId}`,
+      status: 'draft', createdAt: now(), updatedAt: now(), branch: `${plan.workflow?.mode === 'direct' ? 'codex' : 'feature'}/${plan.featureId}`,
       ...(plan.workflow?.issue ? {parentIssue: plan.workflow.issue} : {}),
       tasks: plan.tasks.map(t => ({id: t.id, integrated: false, cursor: 'BUILD', evidence: [], sessions: {}})),
       finalPhase: 'SYNC', finalEvidence: [], finalSessions: {}, failures: {fingerprint: '', head: '', count: 0},
