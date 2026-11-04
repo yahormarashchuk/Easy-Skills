@@ -24,11 +24,12 @@ type Build = (slice: string, cwd: string, round: number) => {outcome: 'passed' |
  * Three slices listed out of order: `two` and `three` depend on `one`. BUILD writes `<slice>.txt` in its slice worktree
  * unless the test replaces it; every other stage passes.
  */
-async function setup(build: Build = () => {}) {
+async function setup(build: Build = () => {}, config: {three?: string[]; delegate?: (prompt: string, call: number) => string; verify?: (slice: string, call: number) => string | undefined} = {}) {
   const f = await fixture(), ui = new UI(); ui.denied.add('profile:customize');
   const profile: ModelProfile = {name: 'Fixture', assignments: structuredClone(f.run.plan.assignments)};
   const project = {...f.run.plan.project}; delete project.mergePolicy;
   const builds: string[] = [], delegated: string[] = [], rounds = new Map<string, number>();
+  const buildCalls: {slice: string; prompt: string; session?: string}[] = [], verifyCalls: {slice: string; prompt: string; session?: string}[] = [];
   const client: Client = {...f.client, async run(a, prompt, options) {
     if (prompt.includes('Investigate this project progressively')) {
       options.onSession?.(options.session || 'project-interview');
@@ -42,6 +43,7 @@ async function setup(build: Build = () => {}) {
     }
     if (options.stage === 'PLAN' && prompt.includes("owner's delegate")) {
       delegated.push(prompt);
+      if (config.delegate) return {outcome: 'passed', summary: config.delegate(prompt, delegated.length), findings: []};
       return {outcome: 'passed', summary: JSON.stringify({resolution: 'answer', category: 'environment', answer: 'Use the tool by its full path C:\\tools\\tool.exe.', rationale: 'Inside the slice scope.'}), findings: []};
     }
     if (options.stage === 'PLAN') {
@@ -51,17 +53,22 @@ async function setup(build: Build = () => {}) {
       seed.tasks = [
         {id: 'two', title: 'Second behavior', description: 'Second step', dependsOn: ['one'], scope: {areas: [], paths: ['two.txt', 'broken']}, acceptance: ['Second works']},
         {id: 'one', title: 'First behavior', description: 'First step', dependsOn: [], scope: {areas: [], paths: ['one.txt']}, acceptance: ['First works']},
-        {id: 'three', title: 'Third behavior', description: 'Third step', dependsOn: ['one'], scope: {areas: [], paths: ['three.txt']}, acceptance: ['Third works']}];
+        {id: 'three', title: 'Third behavior', description: 'Third step', dependsOn: ['one'], scope: {areas: [], paths: ['three.txt']}, acceptance: config.three || ['Third works']}];
       return {outcome: 'passed', summary: 'Technical plan', findings: [], plan: Plan.parse(seed)};
     }
     if (a.model === 'exact-BUILD') {
       options.onSession?.(options.session || 'build-' + basename(options.cwd));
       const slice = basename(options.cwd), round = (rounds.get(slice) || 0) + 1;
-      rounds.set(slice, round); builds.push(slice);
+      rounds.set(slice, round); builds.push(slice); buildCalls.push({slice, prompt, session: options.session});
       const custom = build(slice, options.cwd, round);
       if (custom?.outcome === 'blocked') return {outcome: 'blocked', summary: 'Blocked in ' + slice, question: custom.question, findings: []};
       if (!custom && slice !== 'integration') writeFileSync(join(options.cwd, slice + '.txt'), slice + ' behavior\n');
       return {outcome: 'passed', summary: 'Built ' + slice, findings: []};
+    }
+    if (a.model === 'exact-VERIFY') {
+      const slice = basename(options.cwd), question = config.verify?.(slice, verifyCalls.filter(c => c.slice === slice).length + 1);
+      verifyCalls.push({slice, prompt, session: options.session});
+      if (question) {options.onSession?.(options.session || 'verify-' + slice); return {outcome: 'blocked', summary: 'VERIFY blocked in ' + slice, question, findings: []};}
     }
     return f.client.run(a, prompt, options);
   }};
@@ -70,7 +77,7 @@ async function setup(build: Build = () => {}) {
   const plan = await wizard.proposal(f.root, 'Add three behaviors', profile), run = await wizard.approve(f.root, plan);
   const engine = (delegateDecisions = false) => new Engine(f.store, {client, github: f.github, testRemote: f.remote, delegateDecisions});
   const slice = (id: string) => f.store.get(run.id).tasks.find(t => t.id === id)!;
-  return {...f, ui, plan, approved: run, engine, builds, delegated, slice};
+  return {...f, ui, plan, approved: run, engine, builds, delegated, slice, buildCalls, verifyCalls};
 }
 
 test('approval publishes a milestone, a parent and one labelled, assigned Issue per slice; each slice PR is merged by the runner before its Issue closes', async () => {
@@ -155,6 +162,126 @@ test('a slice question is answered by the delegate inside that slice, and the an
     assert.match(f.delegated[0]!, /"mergeSlices":true/);
     assert.ok(f.github.log.some(entry => entry.startsWith(`comment #${f.slice('three').issue} delegate:`)));
     assert.deepEqual(f.builds, ['one', 'two', 'three', 'three']);
+  } finally {await f.dispose();}
+});
+
+const THREE = ['Third works', 'Third is proven by a new provenance manifest', 'Third rejects stale results with a new validator', 'Third keeps studio isolation'];
+const narrow = (remove: number[], extra: object = {}) => JSON.stringify({resolution: 'narrow', category: 'narrow-scope', answer: '', removeAcceptance: remove,
+  rationale: 'The project configures no provenance tooling; the remaining criteria still cover the behavior.', ...extra});
+/** VERIFY of slice three stops with `question` on its first `blocks` runs. */
+const blockVerify = (blocks: number, question = (call: number) => 'Which manifest proves the run? ' + call) => (slice: string, call: number) => slice === 'three' && call <= blocks ? question(call) : undefined;
+type Fixture = Awaited<ReturnType<typeof setup>>;
+const planOf = (f: Fixture) => f.store.get(f.approved.id).plan;
+const events = (f: Fixture, type: string) => (f.store.events(f.approved.id) as {type: string; data: string}[]).filter(e => e.type === type).map(e => JSON.parse(e.data));
+
+test('a delegate narrows the slice plan: the stage continues in its session with the amended plan, and nobody is asked', async () => {
+  const f = await setup(undefined, {three: THREE, delegate: () => narrow([1, 2]), verify: blockVerify(1)});
+  try {
+    const before = planOf(f), beforeHash = f.store.get(f.approved.id).planHash;
+    const ready = await f.engine(true).run(f.approved.id);
+    assert.equal(ready.status, 'ready', ready.reason || ''); assert.equal(ready.pendingDecision, undefined);
+    const three = ready.plan.tasks.find(t => t.id === 'three')!;
+    assert.deepEqual(three.acceptance, [THREE[0], THREE[3]]);
+    // Nothing but those criteria changed: paths, checks, permissions, workflow, assignments and repairPolicy are byte-identical.
+    const strip = (plan: Plan) => hash({...plan, tasks: plan.tasks.map(t => t.id === 'three' ? {...t, acceptance: []} : t)});
+    assert.equal(strip(ready.plan), strip(before)); assert.deepEqual(three.scope, before.tasks.find(t => t.id === 'three')!.scope);
+    assert.equal(hash(ready.plan.project.checks), hash(before.project.checks)); assert.equal(hash(ready.plan.permissions), hash(before.permissions));
+    assert.equal(ready.planHash, hash(ready.plan)); assert.equal(ready.approvedHash, ready.planHash); assert.notEqual(ready.planHash, beforeHash);
+    const history = f.store.operation<{plan: Plan; planHash: string; approvedHash: string}>(`${ready.id}:approval:${beforeHash}`)!;
+    assert.equal(history.planHash, beforeHash); assert.equal(hash(history.plan), beforeHash); assert.deepEqual(history.plan.tasks.find(t => t.id === 'three')!.acceptance, THREE);
+    assert.equal(f.store.operation<{amendments: number}>(`${ready.id}:delegate-decisions`)!.amendments, 1);
+
+    // The same VERIFY session continued; its prompt shows the amended criteria and says what happened.
+    const verifies = f.verifyCalls.filter(c => c.slice === 'three');
+    assert.equal(verifies.length, 2); assert.equal(verifies[0]!.session, undefined); assert.equal(verifies[1]!.session, 'verify-three');
+    const scope = /\[scope\]\n([^\n]*)/.exec(verifies[1]!.prompt)![1]!;
+    assert.match(scope, /Third works/); assert.match(scope, /studio isolation/); assert.doesNotMatch(scope, /provenance manifest/);
+    assert.match(verifies[1]!.prompt, /delegate narrowed the approved plan/); assert.match(verifies[1]!.prompt, /no longer required/);
+    assert.match(verifies[1]!.prompt, /Third rejects stale results with a new validator/);
+    assert.match(verifies[0]!.prompt, /never demand checks, manifests or provenance that are not in the approved configuration/);
+    assert.match(verifies[0]!.prompt, /\["acceptance"\]/); assert.match(verifies[0]!.prompt, /naming the criterion by its number/);
+    assert.match(f.delegated[0]!, /Acceptance criteria of task "three" you may narrow:\n0: Third works\n1: Third is proven/);
+
+    // The event and the Issue comment record it; the slice PR lists only the amended criteria.
+    const [event] = events(f, 'plan.narrowed');
+    assert.equal(events(f, 'plan.narrowed').length, 1); assert.equal(event.task, 'three'); assert.equal(event.stage, 'VERIFY');
+    assert.deepEqual(event.removed, [THREE[1], THREE[2]]); assert.equal(event.removedCount, 2); assert.equal(event.remaining, 2); assert.match(event.rationale, /no provenance tooling/);
+    const issue = f.slice('three').issue!;
+    assert.ok(f.github.log.some(entry => entry.startsWith(`comment #${issue} narrow:`)));
+    const comment = f.github.commentsWritten.find(c => c.includes('Autonomous plan change (no owner was asked)'))!;
+    assert.match(comment, /Third is proven by a new provenance manifest/); assert.match(comment, /only removed requirements/); assert.match(comment, /no provenance tooling/);
+    assert.ok(!(events(f, 'decision.requested').length));
+    assert.doesNotMatch(f.github.published.get(f.slice('three').pr!.number)!.body, /provenance manifest/);
+    assert.doesNotMatch(f.github.published.get(ready.finalPr!.number)!.body, /provenance manifest/);
+    assert.match(f.github.published.get(ready.finalPr!.number)!.body, /Third keeps studio isolation/);
+  } finally {await f.dispose();}
+});
+
+test('a narrow reply the runner cannot accept is escalated to the owner and changes nothing', async () => {
+  const cases: {name: string; three: string[]; reply: string}[] = [
+    {name: 'index out of range', three: THREE, reply: narrow([7])},
+    {name: 'three removals', three: THREE, reply: narrow([0, 1, 2])},
+    {name: 'every criterion', three: ['Third works', 'Third needs a validator'], reply: narrow([0, 1])},
+    {name: 'scope paths added', three: THREE, reply: narrow([1], {scope: {areas: [], paths: ['**']}})},
+    {name: 'an answer carrying a removal', three: THREE, reply: JSON.stringify({resolution: 'answer', category: 'environment', answer: 'Carry on.', rationale: 'Fine.', removeAcceptance: [1]})},
+    {name: 'an explicit escalation', three: THREE, reply: JSON.stringify({resolution: 'escalate', category: 'needs-owner', answer: '', rationale: 'Owner decides.'})},
+  ];
+  for (const {name, three, reply} of cases) {
+    const f = await setup(undefined, {three, delegate: () => reply, verify: blockVerify(1)});
+    try {
+      const before = f.store.get(f.approved.id), stopped = await f.engine(true).run(f.approved.id);
+      assert.equal(stopped.status, 'needs_decision', name); assert.ok(stopped.pendingDecision && !stopped.pendingDecision.answer, name);
+      assert.equal(hash(stopped.plan), hash(before.plan), name); assert.equal(stopped.planHash, before.planHash, name);
+      assert.equal(f.delegated.length, 1, name); assert.equal(f.verifyCalls.filter(c => c.slice === 'three').length, 1, name);
+      assert.equal(events(f, 'plan.narrowed').length, 0, name); assert.equal(events(f, 'decision.requested').length, 1, name);
+      assert.ok(!f.github.commentsWritten.some(c => c.includes('Autonomous plan change')), name);
+    } finally {await f.dispose();}
+  }
+});
+
+test('a run may be amended three times, never twice for one blocker, and a fourth amendment goes to the owner', async () => {
+  const six = ['c0', 'c1', 'c2', 'c3', 'c4', 'c5'].map(text => text + ' needs tooling');
+  const f = await setup(undefined, {three: six, delegate: () => narrow([0]), verify: blockVerify(4)});
+  try {
+    const stopped = await f.engine(true).run(f.approved.id);
+    assert.equal(stopped.status, 'needs_decision'); assert.ok(stopped.pendingDecision && !stopped.pendingDecision.answer);
+    assert.deepEqual(stopped.plan.tasks.find(t => t.id === 'three')!.acceptance, six.slice(3));
+    assert.equal(f.delegated.length, 4); assert.equal(events(f, 'plan.narrowed').length, 3);
+    assert.match(f.delegated[0]!, /You MAY narrow the plan/); assert.match(f.delegated[2]!, /You MAY narrow the plan/);
+    assert.doesNotMatch(f.delegated[3]!, /You MAY narrow the plan/, 'the prompt stops offering what the runner would refuse');
+    assert.equal(f.store.operation<{amendments: number}>(`${stopped.id}:delegate-decisions`)!.amendments, 3);
+    assert.equal(stopped.planHash, hash(stopped.plan)); assert.equal(stopped.approvedHash, stopped.planHash);
+    // Each amendment left the plan it replaced in the approval history.
+    assert.equal(events(f, 'plan.narrowed').filter(e => f.store.operation(`${stopped.id}:approval:${e.previous}`)).length, 3);
+  } finally {await f.dispose();}
+
+  const repeat = await setup(undefined, {three: THREE, delegate: () => narrow([1]), verify: blockVerify(2, () => 'Which manifest proves the run?')});
+  try {
+    const stopped = await repeat.engine(true).run(repeat.approved.id);
+    assert.equal(stopped.status, 'needs_decision'); assert.equal(repeat.delegated.length, 1, 'the delegate is not asked the same blocker twice');
+    assert.equal(stopped.plan.tasks.find(t => t.id === 'three')!.acceptance.length, 3); assert.equal(events(repeat, 'plan.narrowed').length, 1);
+  } finally {await repeat.dispose();}
+});
+
+test('nothing is narrowed unless delegated decisions are on', async () => {
+  const f = await setup(undefined, {three: THREE, delegate: () => narrow([1, 2]), verify: blockVerify(1)});
+  try {
+    const before = f.store.get(f.approved.id), stopped = await f.engine(false).run(f.approved.id);
+    assert.equal(stopped.status, 'needs_decision'); assert.equal(f.delegated.length, 0); assert.equal(stopped.planHash, before.planHash); assert.equal(hash(stopped.plan), hash(before.plan));
+    assert.equal(events(f, 'plan.narrowed').length, 0);
+  } finally {await f.dispose();}
+});
+
+test('a blocked BUILD question narrows the slice plan too, and the BUILD session continues', async () => {
+  const f = await setup((slice, _cwd, round) => slice === 'three' && round === 1 ? {outcome: 'blocked', question: 'Which validator should I add?'} : undefined,
+    {three: THREE, delegate: () => narrow([2])});
+  try {
+    const ready = await f.engine(true).run(f.approved.id);
+    assert.equal(ready.status, 'ready', ready.reason || '');
+    assert.deepEqual(ready.plan.tasks.find(t => t.id === 'three')!.acceptance, [THREE[0], THREE[1], THREE[3]]);
+    const builds = f.buildCalls.filter(c => c.slice === 'three');
+    assert.equal(builds.length, 2); assert.equal(builds[1]!.session, 'build-three'); assert.match(builds[1]!.prompt, /delegate narrowed the approved plan/);
+    assert.doesNotMatch(/\[scope\]\n([^\n]*)/.exec(builds[1]!.prompt)![1]!, /new validator/);
   } finally {await f.dispose();}
 });
 

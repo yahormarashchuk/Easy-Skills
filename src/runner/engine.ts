@@ -22,7 +22,7 @@ import { ownerAlive, processIdentity } from '../process-identity.js';
 import { ignoredOutputs } from './setup-outputs.js';
 import { publishRepairIssue, repairIssues, issueLabels, closeRepairIssues, allRepairs, milestone, milestoneKey, sliceRepairIssues } from './issue-history.js';
 import { pullRequestBody, pullRequestTitle } from './pull-request.js';
-import { MAX_DELEGATE_DECISIONS, acceptDelegateReply, delegatePrompt } from './delegate.js';
+import { MAX_DELEGATE_DECISIONS, acceptDelegateReply, delegatePrompt, narrowedPlan, narrowingViolation, type DelegateReply, type Narrowable } from './delegate.js';
 
 class Blocked extends Error {}
 /** Generated files whose full diff is too large to review line by line. */
@@ -426,20 +426,25 @@ export class Engine {
    * inside the approved plan; anything that would widen scope, rules, rights or touch real systems, and any question already
    * answered once, still goes to the owner. Every delegated answer is recorded and, for a task with an Issue, commented on it.
    */
-  private async delegate(run: Run, cwd: string, stage: Stage, task: Task | undefined, decision: NonNullable<Run['pendingDecision']>, result: StageResult) {
+  private async delegate(run: Run, cwd: string, stage: Stage, task: Task | undefined, decision: NonNullable<Run['pendingDecision']>, result: StageResult): Promise<(DelegateReply & {narrowed?: string}) | undefined> {
     if (!this.options.delegateDecisions || !run.plan.workflow) return undefined;
-    const key = `${run.id}:delegate-decisions`, state = this.store.operation<{asked: string[]; questions: string[]}>(key) || {asked: [], questions: []};
+    const key = `${run.id}:delegate-decisions`, state = this.store.operation<{asked: string[]; questions: string[]; amendments?: number}>(key) || {asked: [], questions: []};
     if (state.asked.length >= MAX_DELEGATE_DECISIONS || state.asked.includes(hash(decision.question))) return undefined;
+    // Only the criteria of the task the stage works on can be narrowed: a slice's own, or the single task of a direct run.
+    const target = task || (run.plan.workflow.mode === 'direct' ? run.plan.tasks[0] : undefined);
+    const narrowable: Narrowable | undefined = target && {taskId: target.id, acceptance: target.acceptance, amendments: state.amendments || 0};
     let reply;
     try {
-      const raw = await this.client.run(run.plan.assignments.PLAN, delegatePrompt(run.plan, stage, task, decision.question, result.summary, result.findings, state.questions), {
+      const raw = await this.client.run(run.plan.assignments.PLAN, delegatePrompt(run.plan, stage, task, decision.question, result.summary, result.findings, state.questions, narrowable), {
         cwd, stage: 'PLAN', projectRoot: run.root, mode: 'read', signal: this.options.signal});
-      reply = raw.outcome === 'passed' ? acceptDelegateReply(raw.summary, state.asked, decision.question) : undefined;
+      reply = raw.outcome === 'passed' ? acceptDelegateReply(raw.summary, state.asked, decision.question, narrowable) : undefined;
     } catch (error) {
       if (this.options.signal?.aborted) throw error;
       return undefined;
     }
-    this.store.recordOperation(key, run.id, 'delegate.asked', {asked: [...state.asked, hash(decision.question)], questions: [...state.questions, redact(decision.question).slice(0, 300)]});
+    const asked = {asked: [...state.asked, hash(decision.question)], questions: [...state.questions, redact(decision.question).slice(0, 300)], amendments: state.amendments || 0};
+    if (reply?.resolution === 'narrow') return this.narrow(run, stage, target!, decision, reply, key, asked);
+    this.store.recordOperation(key, run.id, 'delegate.asked', asked);
     if (!reply) {this.store.event(run.id, 'decision.escalated', {request: decision.id, stage, task: task?.id}); return undefined;}
     this.store.event(run.id, 'decision.delegated', {request: decision.id, stage, task: task?.id, category: reply.category, question: redact(decision.question), answer: redact(reply.answer), rationale: redact(reply.rationale)});
     const issue = run.tasks.find(t => t.id === task?.id)?.issue || run.parentIssue;
@@ -451,7 +456,42 @@ export class Engine {
     }
     return reply;
   }
+  /**
+   * Applies a delegate's amendment that removes unverifiable acceptance criteria, the way adoptConfiguration binds a task to a
+   * new plan, but without an owner: the previous plan goes to the approval history, the amended one (identical except those
+   * criteria, proven by narrowingViolation) is approved under its own hash, and the run keeps its branch, worktrees, sessions,
+   * cursors, repairs and links. The stage the agent stopped in then continues with the amended plan.
+   */
+  private async narrow(run: Run, stage: Stage, target: Task, decision: NonNullable<Run['pendingDecision']>, reply: DelegateReply, key: string, asked: {asked: string[]; questions: string[]; amendments: number}) {
+    const remove = [...reply.removeAcceptance].sort((a, b) => a - b), removed = remove.map(index => target.acceptance[index]!);
+    const plan = narrowedPlan(run.plan, target.id, remove), violation = narrowingViolation(run.plan, plan, target.id, remove);
+    if (violation) {
+      this.store.recordOperation(key, run.id, 'delegate.asked', asked);
+      this.store.event(run.id, 'decision.escalated', {request: decision.id, stage, task: target.id, reason: violation});
+      return undefined;
+    }
+    const previous = {plan: run.plan, planHash: run.planHash, approvedHash: run.approvedHash};
+    this.store.transaction(() => {
+      this.store.recordOperation(key, run.id, 'delegate.asked', {...asked, amendments: asked.amendments + 1});
+      this.store.recordOperation(`${run.id}:approval:${run.planHash}`, run.id, 'approval.history', previous);
+      run.plan = plan; run.planHash = hash(plan); run.approvedHash = run.planHash;
+      run.pendingDecision = undefined; run.failures = {fingerprint: '', head: '', count: 0};
+      this.store.save(run, 'plan.narrowed', {request: decision.id, stage, task: target.id, previous: previous.planHash, planHash: run.planHash,
+        removed: removed.map(text => redact(text)), rationale: redact(reply.rationale), removedCount: remove.length,
+        remaining: plan.tasks.find(t => t.id === target.id)!.acceptance.length, amendments: asked.amendments + 1});
+    });
+    const issue = run.tasks.find(t => t.id === target.id)?.issue || run.parentIssue;
+    if (issue) {
+      try {
+        const github = this.options.github || new Gh(run.plan.project.repository, run.root);
+        await github.commentOnce(issue, 'narrow:' + decision.id, redact(`Autonomous plan change (no owner was asked) during ${stage}.\n\nRemoved acceptance criteria:\n${removed.map(text => '- ' + text).join('\n')}\n\nWhy: ${reply.rationale}\n\nThis change only removed requirements that cannot be verified with the approved project checks; scope paths, checks, permissions and every other criterion are unchanged. New plan: ${run.planHash}`));
+      } catch { /* the record in the run history stands */ }
+    }
+    return {...reply, narrowed: `\nThe owner is not available. Your delegate narrowed the approved plan (request ${decision.id}) because these acceptance criteria cannot be satisfied with the approved project checks and runner-recorded evidence: ${JSON.stringify(removed)}. Rationale: ${reply.rationale} They are no longer required and must not be reported as missing; every remaining criterion still applies unchanged.`};
+  }
   private async agent(run: Run, stage: Stage, cwd: string, taskState?: TaskState, task?: Task, extra = '', skill?: string, collectReview = true): Promise<StageResult> {
+    // A delegate may have amended the plan since the caller picked its task; the amended criteria are the approved ones.
+    if (task) task = run.plan.tasks.find(t => t.id === task!.id) || task;
     const entryExtra = extra;
     this.checkpoint(run);
     await this.guard(run, cwd);
@@ -534,7 +574,8 @@ export class Engine {
     // Codex BUILD blocked twice on a test host that could not open a socket inside its sandbox, although the runner runs checks itself.
     if (stage === 'BUILD') extra += '\nAfter BUILD the runner runs every approved check outside your sandbox: ' + JSON.stringify(run.plan.project.checks.map(c => c.id)) +
       '. A build or test that cannot run in your sandbox for an environmental reason is not a reason to return blocked; finish the change, report the command and error in findings, and return passed.';
-    if (stage === 'VERIFY') extra += '\nAvailable approved diagnostic commands: ' + JSON.stringify(run.plan.project.checks.filter(c => run.plan.verification?.diagnostics.includes(c.id)).map(c => ({command: c.command, args: c.args}))) + '\nAvailable browser tools: ' + JSON.stringify(run.plan.verification?.browserTools || []);
+    if (stage === 'VERIFY') extra += '\nJudge only against the approved checks ' + JSON.stringify(run.plan.project.checks.map(c => c.id)) + ' and the evidence the runner recorded; never demand checks, manifests or provenance that are not in the approved configuration. If an acceptance criterion cannot be verified with them, report that as a finding naming the criterion by its number (counting from 0) and quoting it, so the plan can be narrowed instead of repaired.' +
+      '\nAvailable approved diagnostic commands: ' + JSON.stringify(run.plan.project.checks.filter(c => run.plan.verification?.diagnostics.includes(c.id)).map(c => ({command: c.command, args: c.args}))) + '\nAvailable browser tools: ' + JSON.stringify(run.plan.verification?.browserTools || []);
     // In the exact session the model already holds the unchanged large sections; only the short ones that frame each request are repeated.
     const assembled = assembleContext({...run, root: cwd}, stage, task, extra, skill, previous && sessions[stage] && previous.session === sessions[stage] ? previous.manifest : undefined);
     this.store.event(run.id, 'context.assembled', {stage, task: task?.id, manifest: assembled.manifest});
@@ -564,6 +605,7 @@ export class Engine {
         run.pendingDecision = {id: randomUUID(), planHash: run.planHash, head: await new Git(cwd).head(cwd), stage, taskId: task?.id,
           question: result.question || result.summary};
         const delegated = await this.delegate(run, cwd, stage, task, run.pendingDecision, result);
+        if (delegated?.narrowed) return this.agent(run, stage, cwd, taskState, task, entryExtra + delegated.narrowed, skill, false);
         if (delegated) {
           run.pendingDecision = {...run.pendingDecision, answer: delegated.answer, source: 'delegate'};
           this.store.save(run, 'decision.answered', {request: run.pendingDecision.id, delegate: true});
@@ -644,6 +686,8 @@ export class Engine {
     await this.guard(run, cwd); await this.setup(run, git, cwd);
     while (!state.integrated) {
       this.checkpoint(run);
+      // A delegate may amend the plan inside a stage; later steps (PR text, further stages) use the amended task.
+      task = run.plan.tasks.find(t => t.id === task.id) || task;
       try {
         switch (state.cursor) {
           case 'BUILD': case 'REPAIR': {

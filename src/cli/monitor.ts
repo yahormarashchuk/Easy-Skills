@@ -65,6 +65,10 @@ export function describe(type: string, data: Record<string, any>): string | unde
     case 'run.suspended': return 'Stopped: ' + (data.reason || data.status || 'see status');
     case 'decision.requested': return 'Your decision is needed: see the question and the command above';
     case 'decision.delegated': return `The delegate answered a ${data.stage || ''} question without you: ${data.question || ''}`.trim();
+    case 'plan.narrowed': {
+      const removed: string[] = Array.isArray(data.removed) ? data.removed : [];
+      return `The delegate removed ${data.removedCount ?? removed.length} acceptance criteri${(data.removedCount ?? removed.length) === 1 ? 'on' : 'a'}${data.task ? ' of ' + data.task : ''} that the approved checks cannot verify, without you: ${removed.join('; ')}`.trim();
+    }
     case 'decision.escalated': return 'The delegate left a question to you';
     case 'setup.child.exited': case 'client.session': case 'control.applied': case 'control.requested': case 'draft.created': return undefined;
     default: return type.replace(/[._]/g, ' ');

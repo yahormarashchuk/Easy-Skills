@@ -20,6 +20,9 @@ test('activity reads like progress, not process bookkeeping', () => {
 test('delegated and escalated decisions are visible in the activity', () => {
   assert.equal(describe('decision.delegated', {stage: 'BUILD', question: 'Which path?'}), 'The delegate answered a BUILD question without you: Which path?');
   assert.equal(describe('decision.escalated', {}), 'The delegate left a question to you');
+  assert.equal(describe('plan.narrowed', {task: 'three', removedCount: 2, removed: ['Needs a manifest', 'Needs a validator']}),
+    'The delegate removed 2 acceptance criteria of three that the approved checks cannot verify, without you: Needs a manifest; Needs a validator');
+  assert.equal(describe('plan.narrowed', {removedCount: 1, removed: ['Needs a manifest']}), 'The delegate removed 1 acceptance criterion that the approved checks cannot verify, without you: Needs a manifest');
   assert.match(describe('decision.requested', {})!, /^Your decision is needed/);
 });
 
