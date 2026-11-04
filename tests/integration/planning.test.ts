@@ -17,6 +17,9 @@ test('PLAN uses the selected model read-only and cannot expand agreed permission
     let model = '', mode: string | undefined;
     const plan = await generatePlan(f.store, f.root, request, {...f.client, async run(a, p, o) {
       model = a.model; mode = o.mode; assert.match(p, /UNAPPROVED, READ-ONLY/);
+      // Criteria may only rely on approved checks and runner evidence; PLAN must not invent verification tooling.
+      assert.match(p, /may rely only on the checks that exist in the approved project configuration \(\["acceptance"\]\)/);
+      assert.match(p, /never require creating new verification tooling, result validators, provenance manifests or new project checks as acceptance, unless the specification explicitly demands that tool as a product deliverable/);
       return {outcome: 'passed', summary: 'Planned', findings: [], plan: f.run.plan};
     }});
     assert.equal(model, assignments.PLAN.model); assert.equal(mode, 'read'); assert.equal(plan.tasks.length, 2);
