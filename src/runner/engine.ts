@@ -22,7 +22,7 @@ import { ownerAlive, processIdentity } from '../process-identity.js';
 import { ignoredOutputs } from './setup-outputs.js';
 import { publishRepairIssue, repairIssues, issueLabels, closeRepairIssues, allRepairs, milestone, milestoneKey, sliceRepairIssues } from './issue-history.js';
 import { pullRequestBody, pullRequestTitle } from './pull-request.js';
-import { MAX_DELEGATE_DECISIONS, acceptDelegateReply, delegatePrompt, narrowedPlan, narrowingViolation, type DelegateReply, type Narrowable } from './delegate.js';
+import { DELEGATE_TIMEOUT_MS, MAX_DELEGATE_DECISIONS, acceptDelegateReply, delegatePrompt, narrowedPlan, narrowingViolation, type DelegateReply, type Narrowable } from './delegate.js';
 
 class Blocked extends Error {}
 /** Generated files whose full diff is too large to review line by line. */
@@ -433,15 +433,19 @@ export class Engine {
     // Only the criteria of the task the stage works on can be narrowed: a slice's own, or the single task of a direct run.
     const target = task || (run.plan.workflow.mode === 'direct' ? run.plan.tasks[0] : undefined);
     const narrowable: Narrowable | undefined = target && {taskId: target.id, acceptance: target.acceptance, amendments: state.amendments || 0};
-    let reply;
-    try {
-      const raw = await this.client.run(run.plan.assignments.PLAN, delegatePrompt(run.plan, stage, task, decision.question, result.summary, result.findings, state.questions, narrowable), {
-        cwd, stage: 'PLAN', projectRoot: run.root, mode: 'read', signal: this.options.signal});
-      reply = raw.outcome === 'passed' ? acceptDelegateReply(raw.summary, state.asked, decision.question, narrowable) : undefined;
-    } catch (error) {
-      if (this.options.signal?.aborted) throw error;
-      return undefined;
+    let reply, answered = false;
+    // A delegate call that hangs (a real one sat for 22 minutes with no output) must not hold the run: it gets a time limit and one retry, then the question goes to the owner.
+    for (let attempt = 0; attempt < 2 && !answered; attempt++) {
+      try {
+        const raw = await this.client.run(run.plan.assignments.PLAN, delegatePrompt(run.plan, stage, task, decision.question, result.summary, result.findings, state.questions, narrowable), {
+          cwd, stage: 'PLAN', projectRoot: run.root, mode: 'read', signal: this.options.signal, timeoutMs: DELEGATE_TIMEOUT_MS});
+        reply = raw.outcome === 'passed' ? acceptDelegateReply(raw.summary, state.asked, decision.question, narrowable) : undefined; answered = true;
+      } catch (error) {
+        if (this.options.signal?.aborted) throw error;
+        this.store.event(run.id, 'delegate.failed', {request: decision.id, stage, attempt: attempt + 1, reason: redact(message(error)).slice(0, 200)});
+      }
     }
+    if (!answered) return undefined;
     const asked = {asked: [...state.asked, hash(decision.question)], questions: [...state.questions, redact(decision.question).slice(0, 300)], amendments: state.amendments || 0};
     if (reply?.resolution === 'narrow') return this.narrow(run, stage, target!, decision, reply, key, asked);
     this.store.recordOperation(key, run.id, 'delegate.asked', asked);
