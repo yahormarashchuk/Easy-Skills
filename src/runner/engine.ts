@@ -730,7 +730,7 @@ export class Engine {
           case 'SHIP': {
             const head = await git.head(cwd);
             if (state.reviewHead !== head || !this.sufficient(run, state.evidence, head)) {state.cursor = 'VERIFY'; break;}
-            await this.agent(run, 'SHIP', cwd, state, task, 'Inspect delivery readiness. The runner publishes and closes the Issue.');
+            await this.agent(run, 'SHIP', cwd, state, task, 'Inspect delivery readiness. The runner publishes and closes the Issue. SHIP cannot edit code: if you find a real defect that needs a code or test change, return outcome failed with the defect in findings so the runner repairs it; return blocked only for a decision that nobody but the owner can make.');
             await git.clean(cwd); if (await git.head(cwd) !== head) throw new Blocked('SHIP changed the reviewed commit');
             await git.push(state.branch!, cwd);
             const checked = `Checks at ${head}:\n${state.evidence.map(e => '- ' + e.checkId + ': passed').join('\n')}\n\nReview: passed at ${state.reviewHead}`;
@@ -783,7 +783,8 @@ export class Engine {
         }
       } catch (error) {
         if (!(error instanceof CheckFailure || error instanceof CodeFailure)) throw error;
-        if (['SHIP', 'INTEGRATE', 'REPAIR'].includes(state.cursor)) {
+        // A defect SHIP names is repaired like one VERIFY or REVIEW names; only a failed check at these cursors is a stop.
+        if (['INTEGRATE', 'REPAIR'].includes(state.cursor) || (state.cursor === 'SHIP' && !(error instanceof CodeFailure))) {
           throw new Blocked(message(error));
         }
         run.reason = redact(message(error));
@@ -949,7 +950,7 @@ export class Engine {
         }
         const head = await git.head(cwd);
         if (head !== run.finalReviewHead || !this.sufficient(run, run.finalEvidence, head)) {run.finalPhase = 'VERIFY'; continue;}
-        await this.agent(run, 'SHIP', cwd, undefined, undefined, 'Verify final PR readiness. Do not merge the main branch.');
+        await this.agent(run, 'SHIP', cwd, undefined, undefined, 'Verify final PR readiness. Do not merge the main branch. SHIP cannot edit code: if you find a real defect that needs a code or test change, return outcome failed with the defect in findings so the runner repairs it; return blocked only for a decision that nobody but the owner can make.');
         await git.clean(cwd); if (await git.head(cwd) !== head) throw new Blocked('Final SHIP changed the commit');
         if (run.plan.workflow && (!run.plan.workflow.permissions.pushBranch || !run.plan.workflow.permissions.createPullRequest))
           throw new Blocked('The approved task does not authorize branch push and PR creation');
@@ -967,7 +968,8 @@ export class Engine {
           state: 'ready', reason: 'Ready for final verification and a separate merge decision', url: run.finalPr.url});
       }
       } catch (error) {
-        if (!(error instanceof CheckFailure || error instanceof CodeFailure) || !['VERIFY', 'REVIEW'].includes(run.finalPhase)) throw error;
+        // SHIP is read-only and cannot repair what it finds: a code defect it reports goes to the same repair as one from VERIFY or REVIEW.
+        if (!(error instanceof CheckFailure || error instanceof CodeFailure) || !(['VERIFY', 'REVIEW'].includes(run.finalPhase) || (run.finalPhase === 'SHIP' && error instanceof CodeFailure))) throw error;
         const head = await git.head(cwd);
         this.store.transaction(() => {
           recordFailure(this.store, run, `feature:${run.finalPhase}`, error, head);
