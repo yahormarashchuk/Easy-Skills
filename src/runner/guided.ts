@@ -40,7 +40,9 @@ const Rule = z.object({text: z.string().min(1), evidence: z.array(z.string().min
 const ProjectReply = z.object({summary: z.string().min(1), questions: z.array(Question).max(8),
   rules: z.array(Rule).min(1), conflicts: z.array(z.string()), project: Project}).strict();
 const TaskReply = z.object({summary: z.string().min(1), questions: z.array(Question).max(8),
-  specification: z.string().min(1), acceptance: z.array(z.string().min(1)).min(1), outOfScope: z.array(z.string())}).strict();
+  specification: z.string().min(1), acceptance: z.array(z.string().min(1)).min(1), outOfScope: z.array(z.string()),
+  // Optional so a saved reply from before this field existed still validates; absent means the default (slices).
+  delivery: z.enum(['slices', 'direct']).optional(), deliveryReason: z.string().max(500).optional()}).strict();
 interface Conversation {assignment: Assignment; answers: Record<string, {question: string; answer: string; source: 'owner'}>;
   session?: string; pid?: number; identity?: string; reply?: unknown; createdAt?: string; fingerprint?: string; rejection?: string}
 /** `fingerprint` invalidates only the saved reply; `validate` names why a reply cannot be accepted, `remedy` tells the owner what to do if it keeps failing. */
@@ -397,11 +399,14 @@ export class Guided {
     const key = 'task-interview:' + hash({root, source, assignment: profile.assignments.DEFINE, revision: previous?.planHash, fingerprint: discovery.fingerprint});
     this.showStage('DEFINE', 'current');
     const reply = await this.interview(previous?.worktree || root, key, profile.assignments.DEFINE,
-      `Investigate the task, relevant code, tests and skills. Keep unrelated linked Issues out of scope. Derive meaningful acceptance criteria and explicit exclusions. Ask only important questions that repository evidence cannot answer. Inspect related references only when useful; do not run checks. The source checkout can differ from the target: inspect git show ${discovery.baseHead}:PATH for relevant target code without changing branches. For feedback, inspect the provided existing worktree and actual diff as well.\nTask: ${JSON.stringify(source)}\nApproved project rules: ${JSON.stringify(knowledgeSnapshot(root))}\nDiscovery: ${JSON.stringify(discovery)}\nPrevious PR: ${previous?.finalPr?.url || 'none'}`, TaskReply);
+      `Investigate the task, relevant code, tests and skills. Keep unrelated linked Issues out of scope. Derive meaningful acceptance criteria and explicit exclusions. Ask only important questions that repository evidence cannot answer. Inspect related references only when useful; do not run checks. The source checkout can differ from the target: inspect git show ${discovery.baseHead}:PATH for relevant target code without changing branches. For feedback, inspect the provided existing worktree and actual diff as well.\nTask: ${JSON.stringify(source)}\nApproved project rules: ${JSON.stringify(knowledgeSnapshot(root))}\nDiscovery: ${JSON.stringify(discovery)}\nPrevious PR: ${previous?.finalPr?.url || 'none'}\nAlso choose "delivery" and give "deliveryReason". Use "direct" (one task, one branch, one PR the owner merges) when the task is small, when it is a single change, or when its specification forbids any automatic merge, asks for exactly one human-reviewed PR or its own delivery plan of separate reviewed PRs. Use "slices" (several dependent slices, each with its own Issue and PR that the runner merges into a private feature branch, then one final PR the owner merges) only for a large feature that can be built in ordered steps and whose specification allows the runner to integrate steps itself.`, TaskReply);
     this.ui.say('Specification:\n' + reply.specification + '\nAcceptance:\n' + reply.acceptance.map(s => '- ' + s).join('\n') + '\nOut of scope:\n' + reply.outOfScope.map(s => '- ' + s).join('\n') + '\nOpen questions: 0');
     if (!await this.ui.confirm('task:specification', 'Continue to technical planning with this specification?')) throw new Error('Task specification was not confirmed');
-    // New tasks are sliced unless the owner asks for one direct PR; feedback keeps the workflow it was approved with.
-    const mode = this.options.workflow || (process.env.EASY_SKILLS_WORKFLOW === 'direct' ? 'direct' : 'slices');
+    // The owner's flag or environment decides first, then DEFINE's reading of the specification, then slices; feedback keeps the workflow it was approved with.
+    const forced = this.options.workflow || (process.env.EASY_SKILLS_WORKFLOW === 'direct' || process.env.EASY_SKILLS_WORKFLOW === 'slices' ? process.env.EASY_SKILLS_WORKFLOW : undefined);
+    const mode = forced || reply.delivery || 'slices';
+    if (!previous) this.ui.say(`Delivery: ${mode === 'direct' ? 'one task, one PR you merge' : 'slices, each with its own Issue and PR, then one final PR you merge'}` +
+      (forced ? ' (chosen by you)' : reply.deliveryReason ? ' (' + redact(reply.deliveryReason) + ')' : '') + '. Change it with run --direct or run --slices.');
     const bound = {...(source.issue ? {issue: source.issue.number} : {}), baseHead: await git.run(['rev-parse', `refs/remotes/origin/${project.mainBranch}`]), context: knowledgeSnapshot(root)};
     const workflow: Workflow = previous?.plan.workflow || (mode === 'direct'
       ? {mode, issueHistory: true, ...bound, permissions: {pushBranch: true, createPullRequest: true, closeIssueOnMerge: true}}
