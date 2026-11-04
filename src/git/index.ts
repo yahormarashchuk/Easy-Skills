@@ -35,10 +35,19 @@ export class Git {
     if (ref.startsWith('-')) throw new Error('Invalid branch name');
     await this.run(['check-ref-format', '--branch', ref]);
   }
-  async clean(cwd: string, includeIgnored = false) {
+  /**
+   * A build server or test host that was just stopped can leave a file for a moment, so a dirty tree is looked at once more after
+   * `settleMs`; what still remains is named, the owner needs the paths to act.
+   */
+  async clean(cwd: string, includeIgnored = false, settleMs = 4_000) {
     const args = ['status', '--porcelain=v1', '--untracked-files=all'];
     if (includeIgnored) args.push('--ignored=matching');
-    if (await this.run(args, cwd)) throw new Error('Worktree contains uncommitted, untracked or ignored files: ' + cwd);
+    let dirty = await this.run(args, cwd);
+    if (dirty) {await new Promise(resolve => setTimeout(resolve, settleMs)); dirty = await this.run(args, cwd);}
+    if (dirty) {
+      const files = dirty.split('\n').map(line => line.slice(3).trim()).filter(Boolean);
+      throw new Error('Worktree contains uncommitted, untracked or ignored files: ' + cwd + ' (' + files.slice(0, 5).join(', ') + (files.length > 5 ? ', and ' + (files.length - 5) + ' more' : '') + ')');
+    }
     if (existsSync(await this.run(['rev-parse', '--path-format=absolute', '--git-path', 'MERGE_HEAD'], cwd))) throw new Error('A merge is already in progress');
   }
   head(cwd: string) {return this.run(['rev-parse', 'HEAD'], cwd);}

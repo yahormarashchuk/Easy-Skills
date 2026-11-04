@@ -127,6 +127,50 @@ export class Engine {
    * After the owner approves a new project configuration, this binds the task to it, keeping its branch, commits and any
    * pending repair. Approved checks can be added but never removed or changed.
    */
+  /**
+   * The owner removes acceptance criteria of one task that its approved checks and the runner's recorded evidence cannot verify,
+   * where the delegate may not (its limits are stricter). Like adoptConfiguration it is reviewed by hash: without the hash it only
+   * shows the proposal. Nothing but the named criteria changes; branch, worktrees, sessions, repairs and Issue/PR links stay.
+   */
+  async narrowAcceptance(id: string, taskId: string, remove: number[], reason: string, approvedHash?: string) {
+    const owner = this.store.acquire('run:' + id), run = this.store.get(id);
+    try {
+      if (!['needs_decision', 'paused'].includes(run.status) || ownerAlive(run.childPid, run.childIdentity))
+        throw new Error('Only a task stopped for a decision or paused, with no live client, can be narrowed');
+      const target = run.plan.tasks.find(t => t.id === taskId);
+      if (!target) throw new Error('No such task in the approved plan: ' + taskId);
+      const indexes = [...remove].sort((a, b) => a - b);
+      if (!reason.trim()) throw new Error('A reason is required');
+      if (!indexes.length || new Set(indexes).size !== indexes.length || indexes.some(index => !Number.isInteger(index) || index < 0 || index >= target.acceptance.length))
+        throw new Error('Name existing, distinct criteria by their 0-based numbers');
+      if (indexes.length >= target.acceptance.length) throw new Error('At least one criterion must remain');
+      const plan = narrowedPlan(run.plan, taskId, indexes), violation = narrowingViolation(run.plan, plan, taskId, indexes);
+      if (violation) throw new Error(violation);
+      const proposal = {runId: id, taskId, removed: indexes.map(index => target.acceptance[index]!), remaining: plan.tasks.find(t => t.id === taskId)!.acceptance,
+        reason: redact(reason), previousPlanHash: run.planHash, planHash: hash(plan)};
+      const digest = hash(proposal);
+      if (!approvedHash) return {...proposal, hash: digest, status: run.status};
+      if (approvedHash !== digest) throw new Error('The proposal changed; review it again');
+      const previous = {plan: run.plan, planHash: run.planHash, approvedHash: run.approvedHash};
+      this.store.transaction(() => {
+        this.store.recordOperation(`${id}:approval:${run.planHash}`, id, 'approval.history', previous);
+        run.plan = plan; run.planHash = proposal.planHash; run.approvedHash = proposal.planHash;
+        run.pendingDecision = undefined; run.failures = {fingerprint: '', head: '', count: 0};
+        run.status = 'approved';
+        this.store.save(run, 'plan.narrowed', {owner: true, task: taskId, previous: previous.planHash, planHash: run.planHash, removed: proposal.removed.map(text => redact(text)),
+          rationale: proposal.reason, removedCount: indexes.length, remaining: proposal.remaining.length});
+        this.store.recordOperation(`${id}:resume-request`, id, 'narrow.resume', {resume: true});
+      });
+      const issue = run.tasks.find(t => t.id === taskId)?.issue || run.parentIssue;
+      if (issue) {
+        try {
+          const github = this.options.github || new Gh(run.plan.project.repository, run.root);
+          await github.commentOnce(issue, 'narrow:' + run.planHash, redact(`Plan change approved by the owner's delegate (hash-reviewed).\n\nRemoved acceptance criteria:\n${proposal.removed.map(text => '- ' + text).join('\n')}\n\nWhy: ${proposal.reason}\n\nScope paths, checks, permissions and every other criterion are unchanged. New plan: ${run.planHash}`));
+        } catch { /* the record in the run history stands */ }
+      }
+      return {...proposal, hash: digest, status: run.status};
+    } finally {this.store.release('run:' + id, owner);}
+  }
   async adoptConfiguration(id: string, approvedHash?: string, extraRepairs = 0, issueHistory = false) {
     const owner = this.store.acquire('run:' + id), run = this.store.get(id);
     try {
