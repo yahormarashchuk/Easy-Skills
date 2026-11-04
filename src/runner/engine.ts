@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { dropBytecode } from './bytecode.js';
 import { randomUUID } from 'node:crypto';
 import type { Run, TaskState, Task, Stage, StageResult, Evidence, PullRequest } from '../contracts.js';
 import { VERSION, Plan } from '../contracts.js';
@@ -56,7 +57,9 @@ export class Engine {
         const base = await git.run(['merge-base', task ? `refs/heads/${run.branch}` : `origin/${run.plan.project.mainBranch}`, 'HEAD'], cwd);
         const paths = task ? task.scope!.paths : run.plan.tasks.flatMap(t => t.scope!.paths);
         const changed = (await git.run(['diff', '--name-only', '-z', base, '--'], cwd)).split('\0').filter(Boolean);
-        changed.push(...(await git.run(['ls-files', '--others', '--exclude-standard', '-z'], cwd)).split('\0').filter(Boolean));
+        const untracked = (await git.run(['ls-files', '--others', '--exclude-standard', '-z'], cwd)).split('\0').filter(Boolean);
+        // Bytecode caches an agent's script left behind are removed instead of stopping the run.
+        changed.push(...dropBytecode(cwd, untracked));
         const outside = changed.filter(p => !inScope(p, paths));
         if (outside.length) throw new Blocked('Changes exceed the approved task paths: ' + outside.join(', '));
       }
