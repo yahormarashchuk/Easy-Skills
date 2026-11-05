@@ -3,7 +3,7 @@ import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { dropBytecode } from './bytecode.js';
 import { randomUUID } from 'node:crypto';
 import type { Run, TaskState, Task, Stage, StageResult, Evidence, PullRequest } from '../contracts.js';
-import { VERSION, Plan } from '../contracts.js';
+import { VERSION, Plan, Assignment } from '../contracts.js';
 import { Store, ResourceBusy } from '../persistence/store.js';
 import { CliClient, ClientError, classify, type Client } from '../adapters/index.js';
 import { Git } from '../git/index.js';
@@ -136,6 +136,36 @@ export class Engine {
    * where the delegate may not (its limits are stricter). Like adoptConfiguration it is reviewed by hash: without the hash it only
    * shows the proposal. Nothing but the named criteria changes; branch, worktrees, sessions, repairs and Issue/PR links stay.
    */
+  /**
+   * The owner gives one stage another provider, model or effort. The assignment is part of the approved plan, so this is reviewed by
+   * hash like narrowAcceptance and only works on a task stopped for a decision or paused. Nothing else in the plan changes; the
+   * sessions of that stage belong to the old assignment and are dropped, the new one is checked for compatibility when the stage starts.
+   */
+  async reassignStage(id: string, stage: Stage, next: unknown, approvedHash?: string) {
+    const owner = this.store.acquire('run:' + id), run = this.store.get(id);
+    try {
+      if (!['needs_decision', 'paused'].includes(run.status) || ownerAlive(run.childPid, run.childIdentity))
+        throw new Error('Only a task stopped for a decision or paused, with no live client, can change a stage assignment');
+      const assignment = Assignment.parse(next), current = run.plan.assignments[stage];
+      if (hash(assignment) === hash(current)) throw new Error('The stage already uses this assignment');
+      const plan = Plan.parse({...run.plan, assignments: {...run.plan.assignments, [stage]: assignment}});
+      const proposal = {runId: id, stage, from: current, to: assignment, previousPlanHash: run.planHash, planHash: hash(plan)};
+      const digest = hash(proposal);
+      if (!approvedHash) return {...proposal, hash: digest, status: run.status};
+      if (approvedHash !== digest) throw new Error('The proposal changed; review it again');
+      const previous = {plan: run.plan, planHash: run.planHash, approvedHash: run.approvedHash};
+      this.store.transaction(() => {
+        this.store.recordOperation(`${id}:approval:${run.planHash}`, id, 'approval.history', previous);
+        run.plan = plan; run.planHash = proposal.planHash; run.approvedHash = proposal.planHash;
+        delete run.finalSessions[stage]; for (const task of run.tasks) delete task.sessions[stage];
+        run.pendingDecision = undefined; run.failures = {fingerprint: '', head: '', count: 0};
+        run.status = 'approved';
+        this.store.save(run, 'plan.reassigned', {stage, from: current, to: assignment, previous: previous.planHash, planHash: run.planHash});
+        this.store.recordOperation(`${id}:resume-request`, id, 'reassign.resume', {resume: true});
+      });
+      return {...proposal, hash: digest, status: run.status};
+    } finally {this.store.release('run:' + id, owner);}
+  }
   async narrowAcceptance(id: string, taskId: string, remove: number[], reason: string, approvedHash?: string, description?: string) {
     const owner = this.store.acquire('run:' + id), run = this.store.get(id);
     try {

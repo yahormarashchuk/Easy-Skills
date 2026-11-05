@@ -7,7 +7,7 @@ import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { parse } from 'yaml';
-import { Assignment, Plan, VERSION } from '../contracts.js';
+import { Assignment, Plan, Stage, VERSION } from '../contracts.js';
 import { Store } from '../persistence/store.js';
 import { Engine, delegateDecisionsEnabled } from '../runner/engine.js';
 import { worker } from '../runner/worker.js';
@@ -142,6 +142,15 @@ program.command('revise <task> <feedback>').description('Review a revised plan a
     await start(store, run.id); ui.say('Applying approved feedback on the existing branch and PR. Use easy-skills status for progress.');
     return run.id;
   }).then(id => id && live(opts) ? follow(id) : undefined));
+program.command('reassign <task>').description('Give one stage of a stopped or paused task another provider, model or effort; shows the proposal, applies it with --apply-hash')
+  .requiredOption('--stage <stage>', 'DEFINE, PLAN, BUILD, VERIFY, REVIEW or SHIP').requiredOption('--provider <provider>', 'codex or claude-code').requiredOption('--model <model>', 'Exact model ID')
+  .option('--effort <effort>', 'Reasoning effort').option('--apply-hash <hash>', 'Apply the reviewed proposal')
+  .action(async (task, opts) => withStore(async store => {
+    const run = resolveRun(store, cwd(), task), engine = new Engine(store);
+    const result = await engine.reassignStage(run.id, Stage.parse(String(opts.stage).toUpperCase()), {provider: opts.provider, model: opts.model, ...(opts.effort ? {effort: opts.effort} : {})}, opts.applyHash);
+    output(result);
+    if (!opts.applyHash) process.stderr.write(`\nReview, then apply with: easy-skills reassign ${task} --stage ${opts.stage} --provider ${opts.provider} --model ${opts.model}${opts.effort ? ' --effort ' + opts.effort : ''} --apply-hash ${result.hash}\n`);
+  }));
 program.command('narrow <task>').description('Remove acceptance criteria of one slice that its approved checks and the runner evidence cannot verify; shows the proposal, applies it with --apply-hash')
   .option('--remove <numbers>', 'Comma-separated 0-based criterion numbers to remove').requiredOption('--reason <text>', 'Why they cannot be verified')
   .option('--description-file <path>', 'Replace the slice description with this shorter text (UTF-8 file)')
