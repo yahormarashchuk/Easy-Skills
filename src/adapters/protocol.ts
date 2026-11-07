@@ -14,5 +14,7 @@ export function parseOutput(value: unknown) {
   const parsed = typeof value === 'string' ? JSON.parse(value) : value;
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Invalid structured result object');
   const {question, planJson, ...rest} = parsed;
-  return StageResult.parse({...rest, ...(question == null ? {} : {question}), ...(planJson == null ? {} : {plan: Plan.parse(JSON.parse(planJson))})});
+  // The output schema makes question and planJson required, so "nothing to ask" and "no plan" arrive as null or as an empty string.
+  const blank = (field: unknown) => field == null || (typeof field === 'string' && !field.trim());
+  return StageResult.parse({...rest, ...(blank(question) ? {} : {question}), ...(blank(planJson) ? {} : {plan: Plan.parse(JSON.parse(planJson as string))})});
 }
