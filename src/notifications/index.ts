@@ -4,7 +4,7 @@ import nodemailer from 'nodemailer';
 import { z } from 'zod';
 import { Store } from '../persistence/store.js';
 import { randomUUID } from 'node:crypto';
-import { redact, message } from '../util.js';
+import { redact, message, readJsonFile } from '../util.js';
 
 export const LocalSettings = z.object({
   smtp: z.object({host: z.string().min(1), port: z.number().int().min(1).max(65535),
@@ -17,7 +17,7 @@ export const LocalSettings = z.object({
 export type LocalSettings = z.infer<typeof LocalSettings>;
 export function settings(store: Store): LocalSettings {
   const path = join(store.home, 'settings.json');
-  return existsSync(path) ? LocalSettings.parse(JSON.parse(readFileSync(path, 'utf8'))) : {};
+  return existsSync(path) ? LocalSettings.parse(readJsonFile(path)) : {};
 }
 export function mailTransport(config: NonNullable<LocalSettings['smtp']>) {
   const pass = config.passwordEnv ? process.env[config.passwordEnv] : undefined;

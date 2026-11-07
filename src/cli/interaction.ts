@@ -3,7 +3,7 @@ import { stdin, stdout } from 'node:process';
 import { readFileSync } from 'node:fs';
 import { z } from 'zod';
 import type { Activity, Interaction } from '../runner/guided.js';
-import { redact } from '../util.js';
+import { readJsonFile, redact } from '../util.js';
 import { resolveChoice, type Choice } from './choices.js';
 import { Provider } from '../contracts.js';
 import { interviewQuestion, stageBanner, stageColor, useColor, useUnicode } from './presentation.js';
@@ -21,7 +21,7 @@ export class TerminalInteraction implements Interaction {
   private interviewCount = 0;
   private view?: ActivityView;
   constructor(readonly options: {answers?: string; nonInteractive?: boolean} = {}) {
-    if (options.answers) this.answers = Script.parse(JSON.parse(readFileSync(options.answers, 'utf8')));
+    if (options.answers) this.answers = Script.parse(readJsonFile(options.answers));
   }
   private get live() {return !this.answers && !this.options.nonInteractive && !!stdout.isTTY;}
   say(text: string) {this.view?.erase(); stdout.write(redact(text) + '\n\n');}

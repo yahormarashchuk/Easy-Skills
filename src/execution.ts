@@ -1,14 +1,14 @@
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { delimiter, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { homedir } from 'node:os';
-import { stateHome } from './util.js';
+import { readJsonFile, stateHome } from './util.js';
 
 export const EXECUTION_POLICY = 'trusted-execution-v1';
 export type ProcessRole = 'git' | 'github' | 'client' | 'mcp' | 'project' | 'notification' | 'supervisor' | 'tool';
 export interface ExecutionSettings {tools?: Record<string, string>; environment?: Partial<Record<ProcessRole, string[]>>}
 function configuration(): {execution?: ExecutionSettings; smtp?: {passwordEnv?: string}} {
   const file = join(stateHome(), 'settings.json');
-  return existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
+  return existsSync(file) ? readJsonFile(file) : {};
 }
 function within(root: string, target: string) {
   const path = relative(resolve(root), resolve(target));

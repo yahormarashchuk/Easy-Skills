@@ -9,7 +9,7 @@ import { describeActivity } from '../adapters/activity.js';
 import { Gh, type GitHub, type Issue } from '../github/index.js';
 import { Git } from '../git/index.js';
 import { Store } from '../persistence/store.js';
-import { ensureDir, hash, now, redact, rejectSymlinkPath, rulesHash } from '../util.js';
+import { ensureDir, hash, now, readJsonFile, redact, rejectSymlinkPath, rulesHash } from '../util.js';
 import { ownerAlive, processIdentity } from '../process-identity.js';
 import { discover, knowledgeSnapshot } from './discovery.js';
 import { requireAgreement, agreementPath, Interview } from './onboarding.js';
@@ -343,7 +343,7 @@ export class Guided {
       '.easy-skills/context/knowledge.json': JSON.stringify(knowledge, null, 2) + '\n',
       '.easy-skills/context/project-map.md': '# Project context\n\n' + reply.summary + '\n\nRelevant skills:\n' + discovery.skills.map(p => '- ' + p).join('\n') + '\n',
     };
-    const previous = existsSync(agreementPath(root)) ? Interview.parse(JSON.parse(readFileSync(agreementPath(root), 'utf8'))) : undefined;
+    const previous = existsSync(agreementPath(root)) ? Interview.parse(readJsonFile(agreementPath(root))) : undefined;
     entries['.easy-skills/decisions/onboarding.json'] = JSON.stringify({schemaVersion: 1, version: (previous?.version || 0) + 1, status: 'agreed',
       rulesHash: rulesHash(root, entries), projectHash: hash(entries['.easy-skills/project.yaml']),
       decisions: [{id: 'repository', question: 'Which maintained conventions govern this project?', status: 'resolved', answer: reply.summary, evidence: reply.rules.flatMap(r => r.evidence)},
