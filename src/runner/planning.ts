@@ -24,6 +24,10 @@ export type PlanDecision = {question: string; answer: string};
 export class PlanDecisionNeeded extends Error {
   constructor(readonly summary: string, readonly question: string) {super('PLAN needs an owner decision: ' + summary + '\nQuestion: ' + question);}
 }
+/** PLAN returned a different delivery mode than the runner seeded, which means the specification contradicts it; the caller may switch the mode when the owner did not force one. */
+export class PlanModeMismatch extends Error {
+  constructor(readonly mode: 'direct' | 'slices', message: string) {super(message);}
+}
 /** Read-only planning uses the assigned PLAN model, before approval or publication. */
 export async function generatePlan(store: Store, root: string, input: unknown, client: Client = new CliClient(), previous?: {worktree: string; plan: Plan; head: string}, cacheDraft = false, onLine?: (line: string) => void, decisions: PlanDecision[] = []) {
   const request = FeatureRequest.parse(input), project = loadProject(root), identity = await new Git(root).identity();
@@ -66,8 +70,13 @@ Every task needs scope with both areas (an array of identifiers, [] when none ap
     if (result.outcome !== 'passed' || !result.plan) throw new Error('PLAN did not return a complete validated plan: ' + result.summary);
     const plan = Plan.parse(result.plan);
     for (const field of ['schemaVersion', 'featureId', 'title', 'spec', 'project', 'assignments', 'permissions', 'verification', 'workflow', 'repairPolicy', 'protectedInputs', 'rulesHash', 'rulesAgreement', 'runnerVersion', 'skillsVersion'] as const)
-      if (hash(plan[field] ?? null) !== hash(seed[field] ?? null)) throw new Error('PLAN changed an agreed field: ' + field +
-        (field === 'workflow' || field === 'permissions' ? '. The delivery mode belongs to the runner, not to PLAN. If the specification needs another mode, restart with run --direct (one task, one PR you merge) or run --slices; your DEFINE answers are saved.' : ''));
+      if (hash(plan[field] ?? null) !== hash(seed[field] ?? null)) {
+        const message = 'PLAN changed an agreed field: ' + field +
+          (field === 'workflow' || field === 'permissions' ? '. The delivery mode belongs to the runner, not to PLAN. If the specification needs another mode, restart with run --direct (one task, one PR you merge) or run --slices; your DEFINE answers are saved.' : '');
+        const mode = plan.workflow?.mode;
+        if (field === 'workflow' && (mode === 'direct' || mode === 'slices') && mode !== seed.workflow?.mode) throw new PlanModeMismatch(mode, message);
+        throw new Error(message);
+      }
     if (rulesHash(root) !== seed.rulesHash) throw new Error('Project rules changed during planning; prepare a new draft');
     if (cacheDraft) store.recordOperation(key + ':draft', run.id, 'planning.draft', plan);
     store.recordOperation(key, run.id, 'planning.completed', {session: store.operation<{session?: string}>(key)?.session, completed: true});

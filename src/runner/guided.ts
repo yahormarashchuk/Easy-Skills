@@ -15,7 +15,7 @@ import { discover, knowledgeSnapshot } from './discovery.js';
 import { requireAgreement, agreementPath, Interview } from './onboarding.js';
 import { requireCompatibility } from './compatibility.js';
 import { loadProject } from '../cli/project.js';
-import { generatePlan, PlanDecisionNeeded, type PlanDecision } from './planning.js';
+import { generatePlan, PlanDecisionNeeded, PlanModeMismatch, type PlanDecision } from './planning.js';
 import { Engine } from './engine.js';
 import { resolveChoice, type Choice } from '../cli/choices.js';
 import type { ModelOption } from '../adapters/model-catalog.js';
@@ -408,9 +408,11 @@ export class Guided {
     if (!previous) this.ui.say(`Delivery: ${mode === 'direct' ? 'one task, one PR you merge' : 'slices, each with its own Issue and PR, then one final PR you merge'}` +
       (forced ? ' (chosen by you)' : reply.deliveryReason ? ' (' + redact(reply.deliveryReason) + ')' : '') + '. Change it with run --direct or run --slices.');
     const bound = {...(source.issue ? {issue: source.issue.number} : {}), baseHead: await git.run(['rev-parse', `refs/remotes/origin/${project.mainBranch}`]), context: knowledgeSnapshot(root)};
-    const workflow: Workflow = previous?.plan.workflow || (mode === 'direct'
-      ? {mode, issueHistory: true, ...bound, permissions: {pushBranch: true, createPullRequest: true, closeIssueOnMerge: true}}
-      : {mode, issueHistory: true, ...bound, permissions: {pushBranch: true, createPullRequest: true, closeIssueOnMerge: true, mergeSlices: true}});
+    const workflowFor = (selected: 'direct' | 'slices'): Workflow => selected === 'direct'
+      ? {mode: selected, issueHistory: true, ...bound, permissions: {pushBranch: true, createPullRequest: true, closeIssueOnMerge: true}}
+      : {mode: selected, issueHistory: true, ...bound, permissions: {pushBranch: true, createPullRequest: true, closeIssueOnMerge: true, mergeSlices: true}};
+    let workflow: Workflow = previous?.plan.workflow || workflowFor(mode);
+    let switched = false;
     let featureId = previous?.plan.featureId || (source.issue ? 'issue-' + source.issue.number : this.store.operation<string>(key + ':feature-id'));
     if (!featureId) {featureId = 'task-' + randomUUID().slice(0, 8); this.store.recordOperation(key + ':feature-id', key, 'task.identified', featureId);}
     this.showStage('PLAN', 'current');
@@ -424,6 +426,13 @@ export class Guided {
           assignments: profile.assignments, permissions: {publishIssues: false, mergeIntermediate: false}, workflow}, this.client,
           previous ? {worktree: previous.worktree!, plan: previous.plan, head: previous.finalReviewHead!} : undefined, true, onLine, decisions));
       } catch (error) {
+        /** DEFINE only guessed the delivery mode; when PLAN, reading the same specification, needs the other one, plan again once with it. An owner flag or an approved task keeps its mode. */
+        if (error instanceof PlanModeMismatch && !forced && !previous && !switched) {
+          switched = true;
+          this.ui.say(`PLAN found that the specification needs ${error.mode === 'direct' ? 'one task, one PR you merge' : 'slices, each with its own Issue and PR'} instead of the delivery DEFINE chose. Planning again with that mode. Force a mode with run --direct or run --slices.`);
+          workflow = workflowFor(error.mode);
+          continue;
+        }
         if (!(error instanceof PlanDecisionNeeded)) throw error;
         if (decisions.some(decision => decision.question === error.question)) throw new Error('PLAN asked again a decision you already answered; your answers are saved. Rerun to plan again.\nQuestion: ' + redact(error.question));
         if (round >= 5) throw new Error('PLAN reached its bounded decision limit; your answers are saved. Rerun to plan again.\nQuestion: ' + redact(error.question));
