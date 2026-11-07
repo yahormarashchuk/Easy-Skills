@@ -840,6 +840,8 @@ export class Engine {
                 `## Issues\n\n${[state.issue!, ...sliceRepairIssues(this.store, run, task.id)].map(n => 'Fixes #' + n).join('\n')}\nParent: #${run.parentIssue}\n\nThe runner merges this PR into \`${run.branch}\` at the reviewed head; the PR to ${run.plan.project.mainBranch} is merged by the owner.`,
                 state.branch!, run.branch, {labels: issueLabels(run, false), assignSelf: true})
               : await github.pr(`${run.id}:pr:${task.id}`, task.title, `${task.description}\n\nImplements #${state.issue}.\n\n${checked}`, state.branch!, run.branch);
+            // GitHub can report the previous head for a few seconds after a push to an existing PR (a slice re-synced after a repair): read it again before refusing.
+            for (let attempt = 0; state.pr.headRefOid !== head && attempt < 15; attempt++) {await new Promise(done => setTimeout(done, 2000)); state.pr = await github.viewPr(state.pr.number);}
             if (state.pr.headRefOid !== head) throw new Blocked('PR head differs from the checked commit');
             if (sliced) await github.commentOnce(state.issue!, `verified:${head}`, `Verified and reviewed at ${head}. PR: ${state.pr.url}. This Issue closes after the runner merges it into ${run.branch}.`);
             else await github.setIssue(state.issue!, false, `Implemented and verified at ${head}. PR: ${state.pr.url}. Dependencies remain pending until integration merge.`);
