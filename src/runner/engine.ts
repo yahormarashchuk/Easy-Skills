@@ -817,6 +817,21 @@ export class Engine {
             if (state.reviewHead !== head || !this.sufficient(run, state.evidence, head)) {state.cursor = 'VERIFY'; break;}
             await this.agent(run, 'SHIP', cwd, state, task, `Inspect delivery readiness. The runner publishes and closes the Issue. Check results at this head (exit code and the totals each check printed): ${JSON.stringify(state.evidence.map(evidenceView))}. SHIP cannot edit code: if you find a real defect that needs a code or test change, return outcome failed with the defect in findings so the runner repairs it; never return failed or blocked because evidence, counts, a PR or a review is not shown to you, since the runner provides them at the right stage. Return blocked only for a decision that nobody but the owner can make.`);
             await git.clean(cwd); if (await git.head(cwd) !== head) throw new Blocked('SHIP changed the reviewed commit');
+            // A slice whose work is already on the feature branch (a precondition check that needed no change) has no commit to deliver,
+            // and GitHub refuses a PR without commits. Checks and review passed at this head, so the runner closes its Issues instead.
+            if (sliced) {
+              await git.fetch();
+              if ((await execute({command: 'git', args: ['merge-base', '--is-ancestor', head, `origin/${run.branch}`]}, {cwd})).code === 0) {
+                const note = `No new commits were needed: ${head} is already on ${run.branch}. Checks and review passed at this head, so this slice has no PR.`;
+                if (run.plan.workflow!.permissions.closeIssueOnMerge) {
+                  for (const bug of sliceRepairIssues(this.store, run, task.id)) await github.setIssue(bug, false, note);
+                  await github.setIssue(state.issue!, false, note);
+                } else await github.commentOnce(state.issue!, `no-change:${head}`, note);
+                state.integrated = true; state.cursor = 'INTEGRATE';
+                run.failures = {fingerprint: '', head: '', count: 0};
+                this.store.save(run, 'task.integrated', {task: task.id, noChange: true, head}); break;
+              }
+            }
             await git.push(state.branch!, cwd);
             const checked = `Checks at ${head}:\n${state.evidence.map(e => '- ' + e.checkId + ': passed').join('\n')}\n\nReview: passed at ${state.reviewHead}`;
             // A slice PR names its Issue and bug Issues with Fixes; GitHub closes only on the default branch, so the runner closes them after its merge.

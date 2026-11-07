@@ -358,3 +358,16 @@ test('a cut-off GitHub response is a temporary network failure, not an owner dec
   const refused = new Gh('test/example', '.', async () => ({code: 1, stdout: '', stderr: 'something else failed', timedOut: false, truncated: false}));
   await assert.rejects(refused.api('issues'), (error: unknown) => error instanceof ClientError && error.kind === 'protocol');
 });
+
+test('a slice whose work is already on the feature branch has no PR: its Issue closes and the run still reaches ready', async () => {
+  const f = await setup(slice => slice === 'three' ? {outcome: 'passed'} : undefined);
+  try {
+    const ready = await f.engine().run(f.approved.id);
+    assert.equal(ready.status, 'ready', ready.reason || '');
+    const three = ready.tasks.find(t => t.id === 'three')!;
+    assert.ok(three.integrated); assert.equal(three.pr, undefined, 'GitHub refuses a PR without commits');
+    assert.equal(f.github.issues.get(three.issue!), false);
+    assert.ok(ready.tasks.filter(t => t.id !== 'three').every(t => t.pr?.state === 'MERGED'));
+    assert.match(f.github.published.get(ready.finalPr!.number)!.body, /PR none/);
+  } finally {await f.dispose();}
+});
