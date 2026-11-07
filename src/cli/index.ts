@@ -15,7 +15,7 @@ import { CliClient } from '../adapters/index.js';
 import { Git } from '../git/index.js';
 import { cleanup, cleanupPlan } from '../runner/cleanup.js';
 import { requestMergeDecision, answerDecision } from '../runner/remote.js';
-import { ensureDir, hash, message, redact, rulesHash, rejectSymlinkPath } from '../util.js';
+import { ensureDir, hash, message, readJsonFile, redact, rulesHash, rejectSymlinkPath } from '../util.js';
 import { inspectProject, initProject, loadProject, installSkills, uninstallSkills, updateProject } from './project.js';
 import { LocalSettings, settings, mailTransport, flushNotifications } from '../notifications/index.js';
 import { configProposal, applyConfig } from '../integrations/config.js';
@@ -338,7 +338,7 @@ program.command('mcp-config').requiredOption('--path <file>', 'Native Codex TOML
   .requiredOption('--file <json>', 'Reviewed client/name/server/requiredTools and optional testCall')
   .option('--apply-hash <hash>')
   .action(async opts => {
-    const value = JSON.parse(readFileSync(resolve(opts.file), 'utf8'));
+    const value = readJsonFile(resolve(opts.file));
     output(opts.applyHash ? await applyMcp(opts.path, value, opts.applyHash, cwd()) : mcpProposal(opts.path, value));
   });
 program.command('inspect-compose').requiredOption('--file <yaml>').requiredOption('--feature <id>')

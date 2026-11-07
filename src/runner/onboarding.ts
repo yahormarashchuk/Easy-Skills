@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, writeFileSync, copyFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
-import { ensureDir, hash, rejectSymlinkPath, rulesHash } from '../util.js';
+import { ensureDir, hash, readJsonFile, rejectSymlinkPath, rulesHash, stripBom } from '../util.js';
 
 export const Interview = z.object({schemaVersion: z.literal(1), version: z.number().int().positive(), status: z.enum(['draft', 'agreed']),
   rulesHash: z.string(), projectHash: z.string(), decisions: z.array(z.object({id: z.string().min(1), question: z.string().min(1),
@@ -25,7 +25,7 @@ export function agreementProposal(root: string, input: unknown) {
     throw new Error('Onboarding has unresolved decisions/conflicts; complete the interview before agreement');
   if (new Set(interview.decisions.map(d => d.id)).size !== interview.decisions.length) throw new Error('Duplicate interview decision IDs');
   const before = existsSync(path) ? readFileSync(path, 'utf8') : null;
-  const previous = before ? Interview.parse(JSON.parse(before)) : undefined;
+  const previous = before ? Interview.parse(JSON.parse(stripBom(before))) : undefined;
   const agreement = {...interview, version: (previous?.version || 0) + 1, rulesHash: rulesHash(root), projectHash: hash(readFileSync(join(root, '.easy-skills/project.yaml'), 'utf8'))};
   const after = JSON.stringify(agreement, null, 2) + '\n';
   return {path, before, after, agreement, hash: hash({path, before, after})};
@@ -41,7 +41,7 @@ export function applyAgreement(root: string, input: unknown, expectedHash: strin
 export function requireAgreement(root: string, binding?: {version: number; hash: string}) {
   const path = agreementPath(root); rejectSymlinkPath(root, path);
   if (!existsSync(path)) throw new Error('Rules agreement missing: complete onboarding and review a replacement plan; existing runs are preserved');
-  const agreement = Interview.parse(JSON.parse(readFileSync(path, 'utf8')));
+  const agreement = Interview.parse(readJsonFile(path));
   if (agreement.status !== 'agreed' || agreement.conflicts.length || agreement.decisions.some(d => d.status !== 'resolved' || !d.answer?.trim())) throw new Error('Onboarding rules agreement is still a draft or unresolved');
   if (agreement.rulesHash !== rulesHash(root)) throw new Error('Rules agreement is stale after changes to project instructions or client controls; run easy-skills init to review and re-approve the rules');
   if (agreement.projectHash !== hash(readFileSync(join(root, '.easy-skills/project.yaml'), 'utf8'))) throw new Error('Project configuration changed after rules agreement');

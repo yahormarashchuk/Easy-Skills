@@ -9,6 +9,9 @@ export function canonical(value: unknown): string {
     .map(k => JSON.stringify(k) + ':' + canonical((value as Record<string, unknown>)[k])).join(',') + '}';
   return JSON.stringify(value);
 }
+/** Editors and Windows PowerShell 5.1 write JSON with a UTF-8 BOM, which JSON.parse rejects. */
+export const stripBom = (text: string): string => text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text;
+export const readJsonFile = (path: string): any => JSON.parse(stripBom(readFileSync(path, 'utf8')));
 export const hash = (value: unknown) => createHash('sha256').update(canonical(value)).digest('hex');
 export const now = () => new Date().toISOString();
 /**
@@ -112,7 +115,7 @@ export function message(error: unknown): string {return error instanceof Error ?
 export function redact(input: string): string {
   const path = join(stateHome(), 'settings.json');
   let settings: any;
-  try {settings = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};}
+  try {settings = existsSync(path) ? readJsonFile(path) : {};}
   catch {return '[REDACTED: local redaction settings could not be loaded]';}
   const names = ['GH_TOKEN', 'GITHUB_TOKEN', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', settings.smtp?.passwordEnv,
     ...Object.values(settings.execution?.environment || {}).flat()] as string[];
