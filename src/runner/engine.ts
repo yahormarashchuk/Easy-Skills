@@ -1065,7 +1065,7 @@ export class Engine {
         if (run.plan.workflow?.issueHistory) for (const issue of [run.parentIssue, ...repairIssues(this.store, run)]) {
           if (issue) await github.commentOnce(issue, `delivery:${head}`, `Verified at ${head}. Delivery PR: ${run.finalPr.url}\nCloses when this PR merges into ${run.plan.project.mainBranch}.`);
         }
-        run.status = 'ready'; this.store.save(run, 'feature.ready', {pr: run.finalPr});
+        run.status = 'ready'; run.reason = undefined; this.store.save(run, 'feature.ready', {pr: run.finalPr});
         this.store.enqueue(`${run.id}:ready:${head}`, {runId: run.id, project: run.plan.project.name, feature: run.plan.title,
           state: 'ready', reason: 'Ready for final verification and a separate merge decision', url: run.finalPr.url});
       }
@@ -1195,7 +1195,7 @@ export class Engine {
       this.store.transaction(() => {
         this.store.recordOperation(`${key}:history:${digest}`, id, 'merge.retry.approved', proposal);
         this.store.recordOperation(key, id, 'merge.retry.authorized', {state: 'authorized', base: prior.base, head, planHash: run.planHash});
-        if (!task) {run.status = 'ready'; this.store.save(run, 'merge.retry.authorized');}
+        if (!task) {run.status = 'ready'; run.reason = undefined; this.store.save(run, 'merge.retry.authorized');}
       });
       return {...proposal, hash: digest, approved: true, next: 'Resume monitoring to submit the newly authorized merge'};
     } finally {this.store.release('run:' + id, owner);}
@@ -1210,7 +1210,7 @@ export class Engine {
       if (pr.state === 'MERGED' && pr.mergedAt && pr.headRefOid === expectedHead && run.finalReviewHead === expectedHead) {
         if (run.approvedHash !== run.planHash || hash(run.plan) !== run.planHash || !this.sufficient(run, run.finalEvidence, expectedHead))
           throw new Error('Historical merge does not match persisted approval and verification evidence');
-        run.finalPr = pr; run.status = 'merged';
+        run.finalPr = pr; run.status = 'merged'; run.reason = undefined;
         if (run.parentIssue && (!run.plan.workflow || run.plan.workflow.permissions.closeIssueOnMerge)) await github.setIssue(run.parentIssue, false, `Feature merged: ${pr.url}`);
         await closeRepairIssues(this.store, run, github, pr.url);
         this.store.save(run, 'feature.merge.reconciled'); return run;
@@ -1224,7 +1224,7 @@ export class Engine {
       if (pr.state !== 'MERGED') await this.merge(run, github, pr, expectedHead, run.syncedBase!);
       const confirmed = await github.viewPr(pr.number);
       if (confirmed.state !== 'MERGED' || !confirmed.mergedAt || confirmed.headRefOid !== expectedHead || confirmed.baseRefName !== run.plan.project.mainBranch || confirmed.headRefName !== run.branch) throw new Error('Final merge was not confirmed at the authorized head and target');
-      run.finalPr = confirmed; run.status = 'merged';
+      run.finalPr = confirmed; run.status = 'merged'; run.reason = undefined;
       if (run.parentIssue && (!run.plan.workflow || run.plan.workflow.permissions.closeIssueOnMerge)) await github.setIssue(run.parentIssue, false, `Feature merged: ${confirmed.url}`);
       await closeRepairIssues(this.store, run, github, confirmed.url);
       this.store.save(run, 'feature.merged'); return run;

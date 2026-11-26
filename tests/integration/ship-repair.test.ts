@@ -48,6 +48,8 @@ test('a defect found at SHIP is repaired and the run still reaches a ready PR', 
     const plan = await wizard.proposal(f.root, 'Add one behavior', profile), run = await wizard.approve(f.root, plan);
     const ready = await new Engine(f.store, {client, github: f.github, testRemote: f.remote}).run(run.id);
     assert.equal(ready.status, 'ready', ready.reason || '');
+    assert.equal(ready.reason, undefined, 'a ready run keeps no earlier repair reason');
+    assert.equal(f.store.get(run.id).reason, undefined);
     assert.equal(ships, 2); assert.match(shipPrompts[0]!, /SHIP cannot edit code: if you find a real defect/);
     assert.ok(builds.length >= 2, 'a repair BUILD followed the SHIP finding');
     assert.ok(builds.some(p => /auxiliary query is not isolated|diagnostic query escapes/.test(p)), 'the repair BUILD received the SHIP finding');
