@@ -723,14 +723,33 @@ export class Engine {
       const lock = check.resource ? this.store.acquire('environment:' + check.resource) : undefined;
       try {
         run.activeResource = check.resource;
-        const log = join(ensureDir(join(this.store.home, 'logs', run.id)), `check-${check.id}-${Date.now()}.log`);
-        const result = await execute(check, {cwd, role: 'project', timeoutMs: check.timeoutMs, log, signal: this.options.signal,
-          onSpawn: pid => {run.childPid = pid; run.childStartedAt = now(); run.childIdentity = processIdentity(pid); this.store.save(run, 'check.started', {check: check.id, pid, baseline});}})
-          .catch(error => ({code: -1, stdout: '', stderr: message(error), timedOut: false}));
-        run.childPid = undefined; run.childStartedAt = undefined;
+        const attempt = async () => {
+          const log = join(ensureDir(join(this.store.home, 'logs', run.id)), `check-${check.id}-${Date.now()}.log`);
+          const result = await execute(check, {cwd, role: 'project', timeoutMs: check.timeoutMs, log, signal: this.options.signal,
+            onSpawn: pid => {run.childPid = pid; run.childStartedAt = now(); run.childIdentity = processIdentity(pid); this.store.save(run, 'check.started', {check: check.id, pid, baseline});}})
+            .catch(error => ({code: -1, stdout: '', stderr: message(error), timedOut: false}));
+          run.childPid = undefined; run.childStartedAt = undefined;
+          const entry: Evidence = {checkId: check.id, head, code: result.code, finishedAt: now(), log};
+          this.store.event(run.id, 'check.finished', entry);
+          return {result, entry};
+        };
+        let {result, entry} = await attempt();
+        // An intermittent failure (a timeout in one test) would otherwise start a repair BUILD that changes nothing.
+        // Run the check once more at the same head under the same guards; a pass is evidence, and records the failed attempt.
+        if (result.code !== 0 && !baseline && failureBundle(check, result, run, this.store.home).classification !== 'unavailable') {
+          this.checkpoint(run);
+          await this.guard(run, cwd);
+          if (await git.head(cwd) !== head) throw new Blocked('A check changed the revision being verified');
+          await git.clean(cwd);
+          const first = entry;
+          ({result, entry} = await attempt());
+          if (result.code === 0) {
+            entry = {...entry, failedAttempt: first.log};
+            this.store.event(run.id, 'check.flaky', {checkId: check.id, head, failedLog: first.log, failedCode: first.code, passedLog: entry.log});
+          }
+        }
         run.activeResource = undefined;
-        const entry: Evidence = {checkId: check.id, head, code: result.code, finishedAt: now(), log};
-        evidence.push(entry); this.store.event(run.id, 'check.finished', entry);
+        evidence.push(entry);
         if (result.code !== 0 && !baseline) {
           const bundle = failureBundle(check, result, run, this.store.home);
           this.store.recordOperation(`${run.id}:failure-bundle`, run.id, 'check.failure', bundle);
@@ -833,7 +852,7 @@ export class Engine {
               }
             }
             await git.push(state.branch!, cwd);
-            const checked = `Checks at ${head}:\n${state.evidence.map(e => '- ' + e.checkId + ': passed').join('\n')}\n\nReview: passed at ${state.reviewHead}`;
+            const checked = `Checks at ${head}:\n${state.evidence.map(e => '- ' + e.checkId + ': passed' + (e.failedAttempt ? ' (failed once, passed on retry at the same head)' : '')).join('\n')}\n\nReview: passed at ${state.reviewHead}`;
             // A slice PR names its Issue and bug Issues with Fixes; GitHub closes only on the default branch, so the runner closes them after its merge.
             state.pr = sliced
               ? await github.pr(`${run.id}:pr:${task.id}`, task.title, `${task.description}\n\n## Acceptance criteria\n\n${task.acceptance.map(a => '- ' + a).join('\n')}\n\n## Verification\n\n${checked}\n\n` +

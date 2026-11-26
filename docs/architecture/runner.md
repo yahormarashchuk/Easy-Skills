@@ -37,7 +37,10 @@ that session. Authentication and model errors stop without provider fallback.
 
 Required check evidence contains command ID, commit, exit code, timestamp and private
 log path. A check or read/review stage that changes the checked tree invalidates readiness.
-Unavailable checks stop for prerequisites. Repeated normalized failures count across
+Unavailable checks stop for prerequisites. A required check that fails (regression or
+timeout) runs once more at the same head under the same guards before any repair; a
+passing retry is evidence that records the failed attempt's log (`failedAttempt`, event
+`check.flaky`), and the PR marks it. A second failure enters repair. Repeated normalized failures count across
 different commits in a scoped failure ledger. Observed revisions are recorded separately;
 independent stage success clears the corresponding unresolved failure scope.
 Quota/network waits use capped exponential backoff and do not count as

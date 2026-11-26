@@ -24,7 +24,7 @@ export function pullRequestBody(store: Store, run: Run, head: string, change: st
     '## Summary', '', sliced ? run.plan.title : task?.title || run.plan.title, '', change ? `Change: ${change}` : '',
     '## Delivered (acceptance criteria)', '', ...(sliced ? run.plan.tasks : task ? [task] : []).flatMap(t => t.acceptance).map(item => '- ' + item), '',
     ...slices,
-    '## Verification', '', `Verified revision: ${head}`, '', ...run.finalEvidence.map(e => `- ${e.checkId}: passed`), '',
+    '## Verification', '', `Verified revision: ${head}`, '', ...run.finalEvidence.map(e => `- ${e.checkId}: passed${e.failedAttempt ? ' (failed once, passed on retry at the same head)' : ''}`), '',
     `Final review: ${run.finalReviewHead}`, 'Final merge: manual.', '',
     '## Issues', '', issues, '',
     '<details><summary>Approved task specification</summary>', '', run.plan.spec, '', '</details>',
