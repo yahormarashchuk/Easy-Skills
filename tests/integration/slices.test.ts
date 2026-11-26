@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, rmSync, existsSync } from 'node:fs';
+import { writeFileSync, rmSync, existsSync, mkdirSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { fixture } from '../helpers.js';
 import { Guided, type Interaction, type ModelProfile } from '../../src/runner/guided.js';
@@ -81,7 +81,8 @@ async function setup(build: Build = () => {}, config: {three?: string[]; delegat
 }
 
 test('approval publishes a milestone, a parent and one labelled, assigned Issue per slice; each slice PR is merged by the runner before its Issue closes', async () => {
-  const f = await setup();
+  // Slice `one` leaves an ignored build output behind, as a real build does.
+  const f = await setup((slice, cwd) => {if (slice === 'one') {mkdirSync(join(cwd, 'node_modules'), {recursive: true}); writeFileSync(join(cwd, 'node_modules/output.bin'), 'build output');}});
   try {
     assert.equal(f.plan.workflow?.mode, 'slices'); assert.equal(f.plan.project.mergePolicy, undefined);
     assert.equal(f.plan.tasks.length, 3); assert.deepEqual(f.plan.permissions, {publishIssues: false, mergeIntermediate: false});
@@ -109,6 +110,13 @@ test('approval publishes a milestone, a parent and one labelled, assigned Issue 
     }
     assert.match(f.github.published.get(ready.tasks.find(t => t.id === 'two')!.issue!)!.body, /Dependencies: one \(#\d+\)/);
     assert.deepEqual(f.github.sliceMerges, ['one', 'two', 'three'].map(id => ready.tasks.find(t => t.id === id)!.pr!.number));
+    // Each integrated slice worktree is released right away, build outputs included; its branch stays.
+    const released = (f.store.events(ready.id) as {type: string}[]).filter(e => e.type === 'task.worktree.released');
+    assert.equal(released.length, 3);
+    for (const state of ready.tasks) {
+      assert.ok(state.worktree && !existsSync(state.worktree), state.id + ' worktree removed');
+      assert.ok(await f.git.run(['rev-parse', '--verify', `refs/heads/${state.branch}`]), state.branch + ' kept');
+    }
 
     const final = ready.finalPr!, body = f.github.published.get(final.number)!.body;
     assert.equal(final.baseRefName, 'trunk'); assert.equal(final.headRefName, ready.branch); assert.equal(final.state, 'OPEN');

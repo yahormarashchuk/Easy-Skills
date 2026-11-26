@@ -848,7 +848,8 @@ export class Engine {
                 } else await github.commentOnce(state.issue!, `no-change:${head}`, note);
                 state.integrated = true; state.cursor = 'INTEGRATE';
                 run.failures = {fingerprint: '', head: '', count: 0};
-                this.store.save(run, 'task.integrated', {task: task.id, noChange: true, head}); break;
+                this.store.save(run, 'task.integrated', {task: task.id, noChange: true, head});
+                await this.releaseSlice(run, state, git, head); break;
               }
             }
             await git.push(state.branch!, cwd);
@@ -899,7 +900,9 @@ export class Engine {
             }
             state.pr = pr; state.integrated = true;
             run.failures = {fingerprint: '', head: '', count: 0};
-            this.store.save(run, 'task.integrated', {task: task.id, pr: pr.number}); break;
+            this.store.save(run, 'task.integrated', {task: task.id, pr: pr.number});
+            if (sliced) await this.releaseSlice(run, state, git, pr.headRefOid);
+            break;
           }
         }
       } catch (error) {
@@ -911,6 +914,20 @@ export class Engine {
         run.reason = redact(message(error));
         await this.failure(run, state, error, git);
       }
+    }
+  }
+  /**
+   * A slice worktree has no further use once its work is on the feature branch, and on a large repository each one holds
+   * gigabytes of build outputs. Release it right away; a worktree that cannot be released safely is kept and reported,
+   * never forced, and never stops the run.
+   */
+  private async releaseSlice(run: Run, state: TaskState, git: Git, head: string) {
+    if (!state.worktree || !state.branch || !existsSync(state.worktree)) return;
+    try {
+      await git.removeDelivered(state.worktree, state.branch, join(this.store.home, 'worktrees', run.id), head);
+      this.store.event(run.id, 'task.worktree.released', {task: state.id, head});
+    } catch (error) {
+      this.store.event(run.id, 'task.worktree.retained', {task: state.id, reason: redact(message(error))});
     }
   }
   private async syncTask(run: Run, state: TaskState, task: Task, git: Git, github: GitHub) {

@@ -162,6 +162,17 @@ export class Git {
     if (!registered.split('\0').filter(p => p.startsWith('worktree ')).some(p => realpathSync.native(p.slice(9)) === realpathSync.native(path)))
       throw new Error('Worktree is not registered');
   }
+  /**
+   * Remove a runner-created task worktree whose work is delivered: it must be owned, at `head`, and free of tracked or
+   * untracked changes. Only then are its ignored files (build outputs, carried copies of ignored client controls) deleted.
+   * The branch is kept.
+   */
+  async removeDelivered(path: string, branch: string, allowedRoot: string, head: string) {
+    await this.assertOwned(path, branch, allowedRoot); await this.clean(path, false, 0);
+    if (await this.head(path) !== head) throw new Error('Worktree is not at the delivered revision');
+    await this.run(['clean', '-fdX'], path);
+    await this.run(['worktree', 'remove', path]);
+  }
   async removeOwned(path: string, branch: string, allowedRoot: string) {
     await this.assertOwned(path, branch, allowedRoot); await this.clean(path, true);
     await this.run(['worktree', 'remove', path]);
