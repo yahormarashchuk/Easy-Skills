@@ -51,11 +51,13 @@ export class Engine {
         throw new Blocked('Task changed managed project knowledge; preserve changes and review a replacement plan');
       const merging = existsSync(await git.run(['rev-parse', '--path-format=absolute', '--git-path', 'MERGE_HEAD'], cwd));
       if (!merging) {
-        // A slice worktree may change only its own paths beyond the feature branch it started from; the feature branch
-        // itself may hold the union of every slice's paths beyond main.
+        // A task worktree is checked against the feature branch it started from, the feature branch against main.
+        // Slices run one after another on the feature branch, so a slice may change any path approved for the feature
+        // (shared docs, tests and localization); an advanced-mode task stays inside its own paths.
         const task = state && run.plan.tasks.find(t => t.id === state.id);
         const base = await git.run(['merge-base', task ? `refs/heads/${run.branch}` : `origin/${run.plan.project.mainBranch}`, 'HEAD'], cwd);
-        const paths = task ? task.scope!.paths : run.plan.tasks.flatMap(t => t.scope!.paths);
+        const feature = run.plan.tasks.flatMap(t => t.scope!.paths);
+        const paths = task && run.plan.workflow?.mode !== 'slices' ? task.scope!.paths : feature;
         const changed = (await git.run(['diff', '--name-only', '-z', base, '--'], cwd)).split('\0').filter(Boolean);
         const untracked = (await git.run(['ls-files', '--others', '--exclude-standard', '-z'], cwd)).split('\0').filter(Boolean);
         // Bytecode caches an agent's script left behind are removed instead of stopping the run.

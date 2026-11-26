@@ -294,11 +294,20 @@ test('a blocked BUILD question narrows the slice plan too, and the BUILD session
   } finally {await f.dispose();}
 });
 
-test('a slice may change only its own paths, even when another slice owns the path', async () => {
-  const f = await setup(slice => {if (slice === 'one') writeFileSync(join(f.slice('one').worktree!, 'two.txt'), 'belongs to slice two\n'); return slice === 'one' ? {outcome: 'passed'} : undefined;});
+test('a slice may change a path another slice of the same feature owns: shared files do not stop the run', async () => {
+  const f = await setup(slice => {if (slice === 'one') writeFileSync(join(f.slice('one').worktree!, 'two.txt'), 'shared by slice one'); return undefined;});
+  try {
+    const ready = await f.engine().run(f.approved.id);
+    assert.equal(ready.status, 'ready', ready.reason || '');
+    assert.deepEqual(f.github.sliceMerges.length, 3);
+  } finally {await f.dispose();}
+});
+
+test('a slice still may not change a path outside the approved feature paths', async () => {
+  const f = await setup(slice => {if (slice === 'one') writeFileSync(join(f.slice('one').worktree!, 'outside.txt'), 'not in any slice'); return undefined;});
   try {
     const stopped = await f.engine().run(f.approved.id);
-    assert.equal(stopped.status, 'needs_decision'); assert.match(stopped.reason!, /exceed the approved task paths: two\.txt/);
+    assert.equal(stopped.status, 'needs_decision'); assert.match(stopped.reason!, /exceed the approved task paths: outside\.txt/);
     assert.equal(f.github.prs.size, 0); assert.deepEqual(f.github.sliceMerges, []);
   } finally {await f.dispose();}
 });

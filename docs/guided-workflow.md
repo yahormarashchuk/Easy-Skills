@@ -67,8 +67,9 @@ and its bug Issues after the merge is confirmed, never earlier. A failing check 
 of a slice publishes a Bug Issue (stage, revision, evidence, parent and slice links,
 milestone) before the corrective BUILD; each slice has its own repair limit.
 
-Every slice worktree may change only that slice's paths beyond the feature branch; the
-feature branch may hold the union of all slice paths beyond main. Managed knowledge,
+Slices run one after another on the feature branch, so a slice worktree may change any
+path approved for the feature (the union of all slice paths), such as shared docs, tests
+and localization. A path outside that union still stops the run. Managed knowledge,
 protected inputs, rules, base binding and delegated decisions apply as in direct mode; a
 delegated answer is judged against the slice's paths and recorded on the slice Issue.
 After the last slice, whole-feature SYNC, checks, VERIFY and REVIEW run on the feature
