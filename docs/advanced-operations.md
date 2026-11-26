@@ -100,8 +100,13 @@ pending. Final validation and review produce a PR into the configured main branc
 Authorize final merge separately with `easy-skills merge RUN_ID --head REVIEWED_SHA`,
 or merge manually through GitHub. For remote control and email confirmation see
 [remote commands](remote-control.md). After confirmed merge, preview
-`easy-skills cleanup RUN_ID` and apply the reviewed hash. Dirty/ignored private files
-block worktree deletion; branches and data volumes are retained.
+`easy-skills cleanup RUN_ID` and apply the reviewed hash. An abandoned run (`abandon
+RUN_ID`) is cleaned up the same way; its commits stay on its kept branches. Uncommitted
+and untracked files always block worktree deletion. Ignored files block it too, unless
+you add `--ignored-outputs`: the preview then shows each worktree's ignored file count,
+size and top folders (build outputs such as `bin/`, `obj/`, `node_modules/`), and
+applying the same hash deletes exactly that reviewed inventory. Branches and data
+volumes are retained.
 
 ## Recovery and diagnostics
 
