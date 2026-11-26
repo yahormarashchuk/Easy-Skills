@@ -23,7 +23,7 @@ take precedence. No new live-provider or GitHub mutation acceptance is claimed.
 | Sync | Recovery refs, merge, conflict session using BUILD, revalidation, manual sync, preserved ambiguous merge | Broader semantic-conflict corpus and crash fault injection |
 | Notifications/remote | Outbox claims/leases/backoff, durable remote operation states, operation-bound merge intent, replay and crash reconciliation | Real SMTP/mobile decision acceptance |
 | Environments/MCP | Shared resource locks, Compose inspection, native Codex TOML/Claude JSON MCP setup, protocol/tool checks and VERIFY tool filtering | Managed database/schema/port provisioning and data lifecycle cleanup; managed/plugin client configurations need live validation |
-| Cleanup | Actual merged PR/head/base checks, live executor/ownership/dirty guards, exact proposal hash; no force | Branches retained; database/volume deletion deliberately unimplemented |
+| Cleanup | Actual merged PR/head/base checks or an abandoned run, live executor/ownership/dirty guards, exact proposal hash, opt-in reviewed ignored-output inventory, slice worktrees released after integration; no force | Branches retained; database/volume deletion deliberately unimplemented |
 | Updates/release | Version pins, backups, documented manual rollback; CI definitions for Windows/Linux; GitHub prerelease packaging | Automated updater/rollback manager; complete v1 acceptance still pending |
 
 The guided redesign adds bounded discovery, rule evidence/provenance, persisted interview
@@ -59,7 +59,8 @@ task worktree files or keep an earlier environment. They also set
 a repository may not ignore, and the task scope guard would block them as unapproved changes.
 
 Cleanup rejects unknown ignored files to avoid deleting private data hidden by
-.gitignore. The optional `--setup-outputs` proposal includes only unchanged ignored
+.gitignore, unless `--ignored-outputs` puts their reviewed inventory (count, size, top
+folders, bound to the proposal hash) into the plan. The optional `--setup-outputs` proposal includes only unchanged ignored
 files inventoried as outputs of the approved setup, under its exact apply hash.
 
 The v1 release gate remains the supplied full scenario: clean Windows installation,

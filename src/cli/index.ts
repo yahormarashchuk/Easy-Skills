@@ -296,7 +296,12 @@ program.command('answer <id>').requiredOption('--request <uuid>', 'Current decis
   .action(async (id, opts) => withStore(async store => {answerDecision(store, id, opts.request, opts.value); output(await start(store, id));}));
 program.command('cleanup <id>').option('--apply-hash <hash>', 'Remove only resources in the reviewed cleanup plan')
   .option('--setup-outputs', 'Include unchanged ignored files created by approved setup in the preview')
-  .action(async (id, opts) => withStore(async store => output(opts.applyHash ? await cleanup(store, id, opts.applyHash, undefined, !!opts.setupOutputs) : await cleanupPlan(store, id, undefined, !!opts.setupOutputs))));
+  .option('--ignored-outputs', 'Include every ignored file (build outputs) in the preview: count, size and top folders are shown and bound to the hash')
+  .description('Preview, then remove, the worktrees of a merged or abandoned run; branches are kept')
+  .action(async (id, opts) => withStore(async store => {
+    const options = {setupOutputs: !!opts.setupOutputs, ignoredOutputs: !!opts.ignoredOutputs};
+    output(opts.applyHash ? await cleanup(store, id, opts.applyHash, undefined, options) : await cleanupPlan(store, id, undefined, options));
+  }));
 program.command('install-skills').requiredOption('--client <name>', 'codex or claude-code')
   .option('--target <directory>', 'Override client skill directory').option('--apply-hash <hash>', 'Apply the reviewed skill installation')
   .option('--interactive', 'Review and confirm installation without copying a hash').option('--answers <json>').option('--non-interactive')

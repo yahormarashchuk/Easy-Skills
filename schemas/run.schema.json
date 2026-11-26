@@ -897,6 +897,9 @@
                 },
                 "log": {
                   "type": "string"
+                },
+                "failedAttempt": {
+                  "type": "string"
                 }
               },
               "required": [
@@ -978,6 +981,9 @@
             "type": "string"
           },
           "log": {
+            "type": "string"
+          },
+          "failedAttempt": {
             "type": "string"
           }
         },
