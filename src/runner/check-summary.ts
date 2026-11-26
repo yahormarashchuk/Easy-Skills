@@ -24,4 +24,5 @@ export function checkSummary(log: string | undefined): string | undefined {
 }
 
 /** Evidence as an agent may see it: no log path, but the exit code and the totals the check printed. */
-export const evidenceView = (evidence: Evidence) => ({checkId: evidence.checkId, head: evidence.head, code: evidence.code, finishedAt: evidence.finishedAt, summary: checkSummary(evidence.log)});
+export const evidenceView = (evidence: Evidence) => ({checkId: evidence.checkId, head: evidence.head, code: evidence.code, finishedAt: evidence.finishedAt, summary: checkSummary(evidence.log),
+  ...(evidence.failedAttempt ? {flaky: 'failed once at this head, then passed on its retry'} : {})});

@@ -111,7 +111,8 @@ export const StageResult = z.object({
   plan: Plan.optional(),
 }).strict();
 export type StageResult = z.infer<typeof StageResult>;
-export interface Evidence { checkId: string; head: string; code: number; finishedAt: string; log: string }
+/** `failedAttempt` is the log of a first attempt that failed at the same head before this passing retry. */
+export interface Evidence { checkId: string; head: string; code: number; finishedAt: string; log: string; failedAttempt?: string }
 export interface PullRequest { number: number; url: string; headRefOid: string; baseRefOid?: string; state: string; mergedAt: string | null; baseRefName: string; headRefName: string }
 export type Cursor = 'BUILD' | 'REPAIR' | 'VERIFY' | 'REVIEW' | 'SHIP' | 'INTEGRATE';
 export interface TaskState {
@@ -134,7 +135,7 @@ export interface Run {
   failures: {fingerprint: string; head: string; count: number};
   control?: 'pause' | 'stop';
 }
-const EvidenceSchema = z.object({checkId: Identifier, head: z.string(), code: z.number().int(), finishedAt: z.string(), log: z.string()}).strict();
+const EvidenceSchema = z.object({checkId: Identifier, head: z.string(), code: z.number().int(), finishedAt: z.string(), log: z.string(), failedAttempt: z.string().optional()}).strict();
 const PrSchema = z.object({number: z.number().int().positive(), url: z.string(), headRefOid: z.string(), state: z.string(),
   mergedAt: z.string().nullable(), baseRefName: z.string(), headRefName: z.string(), baseRefOid: z.string().optional()}).strict();
 const Sessions = z.object({DEFINE: z.string().optional(), PLAN: z.string().optional(), BUILD: z.string().optional(),
