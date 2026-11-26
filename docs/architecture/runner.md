@@ -47,7 +47,11 @@ External operations use stable run-specific markers. Recovery searches existing
 Issues/PRs before creating replacements. Worktree creation records ownership intent
 before acting. Merge recovery consults the PR's actual merged state. The runner does
 not force-push or force-remove worktrees. It retains branches after cleanup, including
-squash-merged branches. External systems cannot be included in a SQLite transaction;
+squash-merged branches. A slice worktree is released as soon as its PR is merged into
+the feature branch (or its work is already there): only when it is owned, at the delivered
+head and free of tracked and untracked changes are its ignored build outputs and the
+worktree removed (`task.worktree.released`); otherwise it is kept and reported
+(`task.worktree.retained`) without stopping the run. External systems cannot be included in a SQLite transaction;
 reconciliation and conservative stops are therefore required, not exactly-once claims.
 
 Direct plans select one task branch/worktree and one final PR. They reuse an existing
